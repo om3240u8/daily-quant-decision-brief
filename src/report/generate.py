@@ -196,6 +196,7 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
     regimes = hist.get("regime", [])
     regime3y_dates = json.dumps(dates_full)
     regime3y_risk = json.dumps(risk_full)
+    regime3y_regimes = json.dumps(regimes)
 
     regime_blocks = ""
     regime_date_labels = ""
@@ -332,6 +333,23 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
   .regime-panel .panel-title {{
     font-size: 0.8rem; color: var(--muted); margin-bottom: 6px;
   }}
+  .range-select {{ display: flex; gap: 4px; }}
+  .range-select button {{
+    background: #21262d; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 6px; padding: 3px 10px; font-size: 0.72rem; cursor: pointer;
+  }}
+  .range-select button.active {{
+    background: #1f6feb; border-color: #1f6feb; color: #fff;
+  }}
+  .regime-chart-wrap {{ position: relative; }}
+  .regime-strip-wrap {{
+    /* left/right set by JS to match Chart.js chartArea */
+    margin-top: 2px;
+  }}
+  .regime-strip-wrap .regime-strip {{
+    display: flex; height: 14px; border-radius: 3px; overflow: hidden;
+    border: 1px solid var(--border);
+  }}
   @media (max-width: 700px) {{
     .two-col {{ grid-template-columns: 1fr; }}
     body {{ padding: 8px; }}
@@ -392,17 +410,28 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
     <canvas id="gaugeChart" height="180"></canvas>
   </div>
 
-  <!-- Option C: continuous strength + discrete state, shared time axis (~3Y) -->
+  <!-- Option C: continuous strength + discrete state, shared time axis + range select -->
   <div class="regime-panel">
-    <div class="panel-title">Regime strength (~3Y) — continuous Risk-On/Off score + discrete state</div>
-    <canvas id="regimeStrengthChart" height="120"></canvas>
-    <div class="regime-strip">{regime_blocks}</div>
-    <div class="regime-date-axis">{regime_date_labels}</div>
+    <div class="panel-title" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;">
+      <span>Regime strength — continuous Risk-On/Off + discrete state</span>
+      <div class="range-select" id="regimeRangeSelect">
+        <button type="button" data-range="6m">6M</button>
+        <button type="button" data-range="1y">1Y</button>
+        <button type="button" data-range="3y" class="active">3Y</button>
+      </div>
+    </div>
+    <div class="regime-chart-wrap">
+      <canvas id="regimeStrengthChart" height="120"></canvas>
+    </div>
+    <div class="regime-strip-wrap">
+      <div class="regime-strip" id="regimeStrip"></div>
+      <div class="regime-date-axis" id="regimeDateAxis"></div>
+    </div>
     <div class="regime-legend">
       <span><i class="swatch" style="background:#238636"></i> Risk-On (&gt;+0.4)</span>
       <span><i class="swatch" style="background:#9e6a03"></i> Neutral</span>
       <span><i class="swatch" style="background:#da3633"></i> Risk-Off (&lt;−0.4)</span>
-      <span style="opacity:0.85;">Dashed lines: ±0.4 (state) · ±1.0 (strong)</span>
+      <span style="opacity:0.85;">Dashed: ±0.4 state · ±1.0 strong</span>
     </div>
   </div>
 
@@ -689,16 +718,106 @@ slope_10y3m = y_10Y − y_3M</pre>
     document.getElementById('togVrp').addEventListener('change', syncToggles);
   }}
 
-  // --- ~3Y regime strength (Option C): continuous Risk + thresholds ---
-  const ctxR = document.getElementById('regimeStrengthChart');
-  if (ctxR && r3yDates && r3yDates.length) {{
-    new Chart(ctxR, {{
+  // --- Regime strength panel (Option C) with range select + aligned bar ---
+  const allDates = {regime3y_dates};
+  const allRisk = {regime3y_risk};
+  const allRegimes = {regime3y_regimes};
+  const colorMap = {{RiskOn: '#238636', Neutral: '#9e6a03', RiskOff: '#da3633'}};
+  let regimeChart = null;
+
+  function daysForRange(r) {{
+    if (r === '6m') return 126;   // ~6m trading days at step≈5 → use calendar-ish
+    if (r === '1y') return 252;
+    return 756; // 3y
+  }}
+
+  function sliceByRange(rangeKey) {{
+    if (!allDates || !allDates.length) return {{dates: [], risk: [], regimes: []}};
+    // hist is sampled every ~5 sessions; approximate points from calendar span
+    const last = allDates[allDates.length - 1];
+    const lastTs = Date.parse(last);
+    let cutoffDays = 1100;
+    if (rangeKey === '6m') cutoffDays = 185;
+    else if (rangeKey === '1y') cutoffDays = 370;
+    else cutoffDays = 1100;
+    const cutoff = lastTs - cutoffDays * 86400000;
+    let i0 = 0;
+    for (let i = 0; i < allDates.length; i++) {{
+      if (Date.parse(allDates[i]) >= cutoff) {{ i0 = i; break; }}
+    }}
+    return {{
+      dates: allDates.slice(i0),
+      risk: allRisk.slice(i0),
+      regimes: allRegimes.slice(i0)
+    }};
+  }}
+
+  function buildBlocks(regimes, dates) {{
+    if (!regimes || !regimes.length) return [];
+    const blocks = [];
+    let cur = regimes[0], start = 0;
+    for (let i = 1; i < regimes.length; i++) {{
+      if (regimes[i] !== cur) {{
+        blocks.push({{reg: cur, a: start, b: i - 1}});
+        cur = regimes[i]; start = i;
+      }}
+    }}
+    blocks.push({{reg: cur, a: start, b: regimes.length - 1}});
+    const total = regimes.length;
+    return blocks.map(function(B) {{
+      const w = Math.max(1.2, (B.b - B.a + 1) / total * 100);
+      const title = B.reg + ' · ' + dates[B.a] + ' → ' + dates[B.b];
+      return {{w: w, reg: B.reg, title: title}};
+    }});
+  }}
+
+  function renderStrip(regimes, dates, leftPx, rightPx, widthPx) {{
+    const strip = document.getElementById('regimeStrip');
+    const axis = document.getElementById('regimeDateAxis');
+    const wrap = document.querySelector('.regime-strip-wrap');
+    if (!strip || !axis || !wrap) return;
+    // Align to Chart.js chartArea
+    wrap.style.marginLeft = leftPx + 'px';
+    wrap.style.marginRight = rightPx + 'px';
+    const blocks = buildBlocks(regimes, dates);
+    strip.innerHTML = blocks.map(function(B) {{
+      return '<div class="reg-block" style="width:' + B.w.toFixed(1) + '%;background:' +
+        (colorMap[B.reg] || '#484f58') + '" title="' + B.title + '"></div>';
+    }}).join('');
+    // Date labels
+    axis.innerHTML = '';
+    const n = dates.length;
+    if (n < 2) return;
+    const nLab = Math.min(6, n);
+    for (let i = 0; i < nLab; i++) {{
+      const idx = Math.round(i * (n - 1) / (nLab - 1));
+      const leftPct = idx / (n - 1) * 100;
+      const lab = (dates[idx] || '').slice(0, 7);
+      const sp = document.createElement('span');
+      sp.className = 'reg-date';
+      sp.style.left = leftPct.toFixed(1) + '%';
+      sp.textContent = lab;
+      axis.appendChild(sp);
+    }}
+  }}
+
+  function drawRegime(rangeKey) {{
+    const slice = sliceByRange(rangeKey);
+    const ctxR = document.getElementById('regimeStrengthChart');
+    if (!ctxR || typeof Chart === 'undefined') return;
+
+    if (regimeChart) {{
+      regimeChart.destroy();
+      regimeChart = null;
+    }}
+
+    regimeChart = new Chart(ctxR, {{
       type: 'line',
       data: {{
-        labels: r3yDates,
+        labels: slice.dates,
         datasets: [{{
           label: 'Risk-On/Off',
-          data: r3yRisk,
+          data: slice.risk,
           borderColor: '#58a6ff',
           backgroundColor: 'rgba(88, 166, 255, 0.12)',
           borderWidth: 1.5,
@@ -711,13 +830,13 @@ slope_10y3m = y_10Y − y_3M</pre>
         responsive: true,
         maintainAspectRatio: false,
         interaction: {{ mode: 'index', intersect: false }},
+        layout: {{ padding: {{ left: 0, right: 0, top: 4, bottom: 0 }} }},
         plugins: {{
           legend: {{ display: false }},
-          annotation: undefined,
           tooltip: {{
             callbacks: {{
-              label: function(ctx) {{
-                const v = ctx.parsed.y;
+              label: function(c) {{
+                const v = c.parsed.y;
                 let state = 'Neutral';
                 if (v > 0.4) state = 'Risk-On';
                 else if (v < -0.4) state = 'Risk-Off';
@@ -734,11 +853,7 @@ slope_10y3m = y_10Y − y_3M</pre>
           y: {{
             min: -2,
             max: 2,
-            ticks: {{
-              color: '#8b949e',
-              font: {{ size: 10 }},
-              callback: function(v) {{ return v; }}
-            }},
+            ticks: {{ color: '#8b949e', font: {{ size: 10 }} }},
             grid: {{
               color: function(ctx) {{
                 const v = ctx.tick.value;
@@ -754,8 +869,9 @@ slope_10y3m = y_10Y − y_3M</pre>
         id: 'thresholdLines',
         afterDraw: function(chart) {{
           const yScale = chart.scales.y;
-          const {{ctx, chartArea}} = chart;
-          if (!chartArea) return;
+          const area = chart.chartArea;
+          if (!area) return;
+          const ctx = chart.ctx;
           const lines = [
             {{v: 0.4, color: 'rgba(63, 185, 80, 0.5)', dash: [4, 3]}},
             {{v: -0.4, color: 'rgba(248, 81, 73, 0.5)', dash: [4, 3]}},
@@ -770,16 +886,42 @@ slope_10y3m = y_10Y − y_3M</pre>
             ctx.strokeStyle = L.color;
             ctx.lineWidth = 1;
             ctx.setLineDash(L.dash);
-            ctx.moveTo(chartArea.left, y);
-            ctx.lineTo(chartArea.right, y);
+            ctx.moveTo(area.left, y);
+            ctx.lineTo(area.right, y);
             ctx.stroke();
           }});
           ctx.restore();
+          // Align discrete bar to chartArea
+          const canvas = chart.canvas;
+          const fullW = canvas.parentElement ? canvas.parentElement.clientWidth : canvas.width;
+          const leftPx = area.left;
+          const rightPx = Math.max(0, fullW - area.right);
+          renderStrip(slice.regimes, slice.dates, leftPx, rightPx, area.right - area.left);
         }}
       }}]
     }});
   }}
+
+  // Range buttons
+  const rangeBtns = document.querySelectorAll('#regimeRangeSelect button');
+  rangeBtns.forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      rangeBtns.forEach(function(b) {{ b.classList.remove('active'); }});
+      btn.classList.add('active');
+      drawRegime(btn.getAttribute('data-range'));
+    }});
+  }});
+
+  // Initial draw (3Y)
+  drawRegime('3y');
+
+  // Re-align on resize
+  window.addEventListener('resize', function() {{
+    const active = document.querySelector('#regimeRangeSelect button.active');
+    drawRegime(active ? active.getAttribute('data-range') : '3y');
+  }});
 }})();
+
 </script>
 </body>
 </html>
