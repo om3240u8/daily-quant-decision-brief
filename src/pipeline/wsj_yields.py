@@ -17,18 +17,21 @@ DATA_DIR.mkdir(exist_ok=True)
 WSJ_BONDS_URL = "https://www.wsj.com/market-data/bonds"
 
 # Fallback static snapshot (used if live scrape fails)
+# Updated 2026-08-21 from Treasury / public sources
 FALLBACK_YIELDS = {
-    "1M": 3.686,
-    "3M": 3.801,
-    "6M": 3.921,
-    "1Y": 4.003,
-    "2Y": 4.206,
-    "3Y": 4.266,
-    "5Y": 4.356,
-    "7Y": 4.497,
-    "10Y": 4.651,
-    "30Y": 5.203,
-    "as_of": "2026-08-07 17:04 EDT (WSJ fallback)"
+    "1M": 3.80,
+    "3M": 3.88,
+    "6M": 3.95,
+    "1Y": 4.03,
+    "2Y": 4.24,
+    "3Y": 4.31,
+    "5Y": 4.43,
+    "7Y": 4.57,
+    "10Y": 4.74,
+    "20Y": 5.25,
+    "30Y": 5.27,
+    "as_of": "2026-08-21 (Treasury / public sources)",
+    "source": "agent_research"
 }
 
 
