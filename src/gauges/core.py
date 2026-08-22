@@ -15,11 +15,12 @@ def risk_on_off(prices: pd.DataFrame, returns: pd.DataFrame = None) -> Dict[str,
     """
     Simple Risk-On / Risk-Off composite.
     Positive = Risk-On.
-    Components: equity momentum, credit (HY vs IG), inverted VIX, BTC.
+    Components: equity momentum, credit (HY vs IG), inverted VIX, BTC,
+    and a light inverted USD-strength term (UUP / DXY).
     """
     score = 0.0
     components = {}
-    
+
     # 1. Equity momentum (SPY 1M + 3M)
     if "SPY" in prices.columns:
         spy = prices["SPY"].dropna()
@@ -28,7 +29,7 @@ def risk_on_off(prices: pd.DataFrame, returns: pd.DataFrame = None) -> Dict[str,
         eq_mom = 0.5 * m1 + 0.5 * m3
         components["equity_momentum"] = round(eq_mom, 4)
         score += np.tanh(eq_mom * 10)
-    
+
     # 2. Credit risk appetite (HYG / LQD)
     if "HYG" in prices.columns and "LQD" in prices.columns:
         ratio = (prices["HYG"] / prices["LQD"]).dropna()
@@ -36,7 +37,7 @@ def risk_on_off(prices: pd.DataFrame, returns: pd.DataFrame = None) -> Dict[str,
             chg = ratio.iloc[-1] / ratio.iloc[-22] - 1
             components["credit_appetite"] = round(chg, 4)
             score += np.tanh(chg * 15)
-    
+
     # 3. Inverted VIX
     if "^VIX" in prices.columns:
         vix = prices["^VIX"].dropna()
@@ -45,7 +46,7 @@ def risk_on_off(prices: pd.DataFrame, returns: pd.DataFrame = None) -> Dict[str,
             components["vix_level"] = round(vix_lvl, 2)
             vix_score = (25 - vix_lvl) / 15
             score += np.clip(vix_score, -1.5, 1.5)
-    
+
     # 4. BTC high-beta
     if "BTC-USD" in prices.columns:
         btc = prices["BTC-USD"].dropna()
@@ -53,9 +54,25 @@ def risk_on_off(prices: pd.DataFrame, returns: pd.DataFrame = None) -> Dict[str,
             btc_m = btc.iloc[-1] / btc.iloc[-22] - 1
             components["btc_momentum"] = round(btc_m, 4)
             score += np.tanh(btc_m * 5) * 0.5
-    
-    final = float(np.clip(score / 2.5, -2, 2))
-    
+
+    # 5. Light inverted USD strength (flight-to-USD is a classic risk-off signal)
+    # Kept lighter than the Liquidity gauge so the two are not pure duplicates.
+    usd_ticker = None
+    for cand in ("UUP", "DX-Y.NYB"):
+        if cand in prices.columns and prices[cand].dropna().shape[0] > 30:
+            usd_ticker = cand
+            break
+    if usd_ticker is not None:
+        u = prices[usd_ticker].dropna()
+        if len(u) > 22:
+            usd_m = float(u.iloc[-1] / u.iloc[-22] - 1)
+            components["usd_momentum_1m"] = round(usd_m, 4)
+            components["usd_ticker"] = usd_ticker
+            # invert: rising USD → risk-off contribution
+            score += np.tanh(-usd_m * 10) * 0.45
+
+    final = float(np.clip(score / 2.8, -2, 2))
+
     return {
         "score": round(final, 3),
         "label": "Risk-On" if final > 0.4 else ("Risk-Off" if final < -0.4 else "Neutral"),

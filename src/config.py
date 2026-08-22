@@ -22,6 +22,7 @@ EQUITIES = {
     # International DM
     "VGK": "Europe",
     "EWJ": "Japan",
+    "EWH": "Hong Kong",
     # EM & China
     "EEM": "Emerging Markets",
     "FXI": "China Large-Cap",
@@ -54,8 +55,11 @@ FX = {
 
 COMMODITIES = {
     "GLD": "Gold",
+    "SLV": "Silver",
     "USO": "Crude Oil (WTI)",
+    "BNO": "Crude Oil (Brent)",
     "CPER": "Copper",
+    "UNG": "Natural Gas",
     "DBC": "Broad Commodities",
 }
 
