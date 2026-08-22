@@ -184,15 +184,22 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
     events = get_upcoming_events(35)
     events_html = events_to_html(events)
 
+    # ~1Y multi-gauge chart
     chart_dates = json.dumps(hist.get("dates", [])[-55:])
     chart_risk = json.dumps(hist.get("risk", [])[-55:])
     chart_liq = json.dumps(hist.get("liq", [])[-55:])
     chart_vrp = json.dumps([x if x is not None else None for x in hist.get("vrp", [])[-55:]])
 
-    regime_blocks = ""
-    regimes = hist.get("regime", [])
+    # ~3Y regime strength panel (full hist)
     dates_full = hist.get("dates", [])
-    if regimes:
+    risk_full = hist.get("risk", [])
+    regimes = hist.get("regime", [])
+    regime3y_dates = json.dumps(dates_full)
+    regime3y_risk = json.dumps(risk_full)
+
+    regime_blocks = ""
+    regime_date_labels = ""
+    if regimes and dates_full:
         blocks = []
         cur = regimes[0]
         start_i = 0
@@ -208,6 +215,16 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
             w = max(1.2, (b - a + 1) / total * 100)
             title = f"{reg} · {dates_full[a]} → {dates_full[b]}"
             regime_blocks += f'<div class="reg-block" style="width:{w:.1f}%;background:{color_map.get(reg,"#484f58")}" title="{title}"></div>'
+
+        # Date axis labels: ~6 evenly spaced
+        n_lab = min(6, len(dates_full))
+        if n_lab >= 2:
+            indices = [int(round(i * (len(dates_full) - 1) / (n_lab - 1))) for i in range(n_lab)]
+            for idx in indices:
+                left_pct = idx / max(len(dates_full) - 1, 1) * 100
+                # compact label: YYYY-MM
+                lab = dates_full[idx][:7] if len(dates_full[idx]) >= 7 else dates_full[idx]
+                regime_date_labels += f'<span class="reg-date" style="left:{left_pct:.1f}%">{lab}</span>'
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -291,15 +308,30 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
   }}
   .toggle-row input {{ margin-right: 4px; }}
   .regime-strip {{
-    display: flex; height: 18px; border-radius: 4px; overflow: hidden;
-    border: 1px solid var(--border); margin: 8px 0 4px;
+    display: flex; height: 14px; border-radius: 4px; overflow: hidden;
+    border: 1px solid var(--border); margin: 4px 0 0;
   }}
   .reg-block {{ height: 100%; min-width: 2px; }}
+  .regime-date-axis {{
+    position: relative; height: 18px; margin-top: 2px; margin-bottom: 6px;
+  }}
+  .reg-date {{
+    position: absolute; transform: translateX(-50%);
+    font-size: 0.65rem; color: var(--muted); white-space: nowrap;
+  }}
   .regime-legend {{
-    display: flex; gap: 12px; font-size: 0.72rem; color: var(--muted); margin-bottom: 10px;
+    display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.72rem; color: var(--muted); margin-bottom: 10px;
   }}
   .regime-legend span {{ display: inline-flex; align-items: center; gap: 4px; }}
-  .swatch {{ width: 10px; height: 10px; border-radius: 2px; }}
+  .swatch {{ width: 10px; height: 10px; border-radius: 2px; display: inline-block; }}
+  .regime-panel {{
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; margin-bottom: 12px;
+  }}
+  .regime-panel canvas {{ width: 100% !important; max-height: 140px; }}
+  .regime-panel .panel-title {{
+    font-size: 0.8rem; color: var(--muted); margin-bottom: 6px;
+  }}
   @media (max-width: 700px) {{
     .two-col {{ grid-template-columns: 1fr; }}
     body {{ padding: 8px; }}
@@ -346,9 +378,11 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
   </div>
 </div>
 
-<!-- Always-visible gauge history + regime blocks -->
+<!-- Always-visible gauge history + regime strength (Option C) -->
 <div class="section">
   <h2>Gauge History & Regime Timeline</h2>
+
+  <!-- Multi-series ~1Y -->
   <div class="chart-wrap">
     <div class="toggle-row">
       <label><input type="checkbox" id="togRisk" checked> Risk-On/Off</label>
@@ -357,14 +391,22 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
     </div>
     <canvas id="gaugeChart" height="180"></canvas>
   </div>
-  <p style="font-size:0.8rem;color:var(--muted);margin-bottom:4px;">Discrete regime blocks (~3Y, Risk-On / Neutral / Risk-Off)</p>
-  <div class="regime-strip">{regime_blocks}</div>
-  <div class="regime-legend">
-    <span><i class="swatch" style="background:#238636"></i> Risk-On</span>
-    <span><i class="swatch" style="background:#9e6a03"></i> Neutral</span>
-    <span><i class="swatch" style="background:#da3633"></i> Risk-Off</span>
+
+  <!-- Option C: continuous strength + discrete state, shared time axis (~3Y) -->
+  <div class="regime-panel">
+    <div class="panel-title">Regime strength (~3Y) — continuous Risk-On/Off score + discrete state</div>
+    <canvas id="regimeStrengthChart" height="120"></canvas>
+    <div class="regime-strip">{regime_blocks}</div>
+    <div class="regime-date-axis">{regime_date_labels}</div>
+    <div class="regime-legend">
+      <span><i class="swatch" style="background:#238636"></i> Risk-On (&gt;+0.4)</span>
+      <span><i class="swatch" style="background:#9e6a03"></i> Neutral</span>
+      <span><i class="swatch" style="background:#da3633"></i> Risk-Off (&lt;−0.4)</span>
+      <span style="opacity:0.85;">Dashed lines: ±0.4 (state) · ±1.0 (strong)</span>
+    </div>
   </div>
-  <p class="footnote">Chart: last ~1Y (sampled). Range bars: track scaled to theoretical normalised range (Risk [−2,+2], Liq [−1.5,+1.5]); shaded band = hist 5–95 of ~1Y; marker = current. Regime blocks collapse consecutive states.</p>
+
+  <p class="footnote">Top chart: last ~1Y multi-gauge (toggles). Bottom: continuous Risk score shows <em>strength</em>; colour bar shows discrete state. Shared date labels. Range bars on cards use theoretical normalised range (Risk [−2,+2], Liq [−1.5,+1.5]).</p>
 </div>
 
 <!-- PM Insights -->
@@ -558,89 +600,185 @@ slope_10y3m = y_10Y − y_3M</pre>
   const risk = {chart_risk};
   const liq = {chart_liq};
   const vrp = {chart_vrp};
+  const r3yDates = {regime3y_dates};
+  const r3yRisk = {regime3y_risk};
 
+  if (typeof Chart === 'undefined') return;
+
+  // --- 1Y multi-gauge chart ---
   const ctx = document.getElementById('gaugeChart');
-  if (!ctx || typeof Chart === 'undefined') return;
-
-  const chart = new Chart(ctx, {{
-    type: 'line',
-    data: {{
-      labels: dates,
-      datasets: [
-        {{
-          label: 'Risk-On/Off',
-          data: risk,
-          borderColor: '#58a6ff',
-          backgroundColor: 'transparent',
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0.2,
-          yAxisID: 'y'
+  if (ctx) {{
+    const chart = new Chart(ctx, {{
+      type: 'line',
+      data: {{
+        labels: dates,
+        datasets: [
+          {{
+            label: 'Risk-On/Off',
+            data: risk,
+            borderColor: '#58a6ff',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.2,
+            yAxisID: 'y'
+          }},
+          {{
+            label: 'Liquidity',
+            data: liq,
+            borderColor: '#3fb950',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.2,
+            yAxisID: 'y'
+          }},
+          {{
+            label: 'VRP',
+            data: vrp,
+            borderColor: '#d29922',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.2,
+            yAxisID: 'y1'
+          }}
+        ]
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {{ mode: 'index', intersect: false }},
+        plugins: {{
+          legend: {{ display: false }},
+          tooltip: {{
+            callbacks: {{
+              title: function(items) {{ return items[0] ? items[0].label : ''; }}
+            }}
+          }}
         }},
-        {{
-          label: 'Liquidity',
-          data: liq,
-          borderColor: '#3fb950',
-          backgroundColor: 'transparent',
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0.2,
-          yAxisID: 'y'
-        }},
-        {{
-          label: 'VRP',
-          data: vrp,
-          borderColor: '#d29922',
-          backgroundColor: 'transparent',
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0.2,
-          yAxisID: 'y1'
+        scales: {{
+          x: {{
+            ticks: {{ maxTicksLimit: 6, color: '#8b949e', font: {{ size: 10 }} }},
+            grid: {{ color: '#21262d' }}
+          }},
+          y: {{
+            position: 'left',
+            ticks: {{ color: '#8b949e', font: {{ size: 10 }} }},
+            grid: {{ color: '#21262d' }},
+            title: {{ display: false }}
+          }},
+          y1: {{
+            position: 'right',
+            ticks: {{ color: '#8b949e', font: {{ size: 10 }} }},
+            grid: {{ drawOnChartArea: false }},
+            title: {{ display: false }}
+          }}
         }}
-      ]
-    }},
-    options: {{
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: {{ mode: 'index', intersect: false }},
-      plugins: {{
-        legend: {{ display: false }},
-        tooltip: {{
-          callbacks: {{
-            title: function(items) {{ return items[0] ? items[0].label : ''; }}
+      }}
+    }});
+
+    function syncToggles() {{
+      chart.data.datasets[0].hidden = !document.getElementById('togRisk').checked;
+      chart.data.datasets[1].hidden = !document.getElementById('togLiq').checked;
+      chart.data.datasets[2].hidden = !document.getElementById('togVrp').checked;
+      chart.update();
+    }}
+    document.getElementById('togRisk').addEventListener('change', syncToggles);
+    document.getElementById('togLiq').addEventListener('change', syncToggles);
+    document.getElementById('togVrp').addEventListener('change', syncToggles);
+  }}
+
+  // --- ~3Y regime strength (Option C): continuous Risk + thresholds ---
+  const ctxR = document.getElementById('regimeStrengthChart');
+  if (ctxR && r3yDates && r3yDates.length) {{
+    new Chart(ctxR, {{
+      type: 'line',
+      data: {{
+        labels: r3yDates,
+        datasets: [{{
+          label: 'Risk-On/Off',
+          data: r3yRisk,
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88, 166, 255, 0.12)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.15,
+          fill: true
+        }}]
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {{ mode: 'index', intersect: false }},
+        plugins: {{
+          legend: {{ display: false }},
+          annotation: undefined,
+          tooltip: {{
+            callbacks: {{
+              label: function(ctx) {{
+                const v = ctx.parsed.y;
+                let state = 'Neutral';
+                if (v > 0.4) state = 'Risk-On';
+                else if (v < -0.4) state = 'Risk-Off';
+                return 'Score ' + (v != null ? v.toFixed(2) : '–') + ' (' + state + ')';
+              }}
+            }}
+          }}
+        }},
+        scales: {{
+          x: {{
+            ticks: {{ maxTicksLimit: 6, color: '#8b949e', font: {{ size: 10 }} }},
+            grid: {{ display: false }}
+          }},
+          y: {{
+            min: -2,
+            max: 2,
+            ticks: {{
+              color: '#8b949e',
+              font: {{ size: 10 }},
+              callback: function(v) {{ return v; }}
+            }},
+            grid: {{
+              color: function(ctx) {{
+                const v = ctx.tick.value;
+                if (v === 0) return '#484f58';
+                if (v === 0.4 || v === -0.4 || v === 1 || v === -1) return '#30363d';
+                return '#21262d';
+              }}
+            }}
           }}
         }}
       }},
-      scales: {{
-        x: {{
-          ticks: {{ maxTicksLimit: 6, color: '#8b949e', font: {{ size: 10 }} }},
-          grid: {{ color: '#21262d' }}
-        }},
-        y: {{
-          position: 'left',
-          ticks: {{ color: '#8b949e', font: {{ size: 10 }} }},
-          grid: {{ color: '#21262d' }},
-          title: {{ display: false }}
-        }},
-        y1: {{
-          position: 'right',
-          ticks: {{ color: '#8b949e', font: {{ size: 10 }} }},
-          grid: {{ drawOnChartArea: false }},
-          title: {{ display: false }}
+      plugins: [{{
+        id: 'thresholdLines',
+        afterDraw: function(chart) {{
+          const yScale = chart.scales.y;
+          const {{ctx, chartArea}} = chart;
+          if (!chartArea) return;
+          const lines = [
+            {{v: 0.4, color: 'rgba(63, 185, 80, 0.5)', dash: [4, 3]}},
+            {{v: -0.4, color: 'rgba(248, 81, 73, 0.5)', dash: [4, 3]}},
+            {{v: 1.0, color: 'rgba(63, 185, 80, 0.35)', dash: [2, 4]}},
+            {{v: -1.0, color: 'rgba(248, 81, 73, 0.35)', dash: [2, 4]}},
+            {{v: 0, color: 'rgba(139, 148, 158, 0.6)', dash: []}}
+          ];
+          ctx.save();
+          lines.forEach(function(L) {{
+            const y = yScale.getPixelForValue(L.v);
+            ctx.beginPath();
+            ctx.strokeStyle = L.color;
+            ctx.lineWidth = 1;
+            ctx.setLineDash(L.dash);
+            ctx.moveTo(chartArea.left, y);
+            ctx.lineTo(chartArea.right, y);
+            ctx.stroke();
+          }});
+          ctx.restore();
         }}
-      }}
-    }}
-  }});
-
-  function syncToggles() {{
-    chart.data.datasets[0].hidden = !document.getElementById('togRisk').checked;
-    chart.data.datasets[1].hidden = !document.getElementById('togLiq').checked;
-    chart.data.datasets[2].hidden = !document.getElementById('togVrp').checked;
-    chart.update();
+      }}]
+    }});
   }}
-  document.getElementById('togRisk').addEventListener('change', syncToggles);
-  document.getElementById('togLiq').addEventListener('change', syncToggles);
-  document.getElementById('togVrp').addEventListener('change', syncToggles);
 }})();
 </script>
 </body>
