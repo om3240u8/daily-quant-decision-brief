@@ -7,3 +7,6 @@ data/*.parquet
 .env
 .venv/
 output/brief_*.html
+output/latest.html
+data/policy_pricing/*.json
+data/policy_pricing/*.jsonl
