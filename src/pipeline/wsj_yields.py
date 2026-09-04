@@ -35,6 +35,47 @@ FALLBACK_YIELDS = {
 }
 
 
+def fetch_treasury_cmt(year: int | None = None) -> dict:
+    """Official daily Treasury par yield curve. Newest row on the year page."""
+    year = year or datetime.now().year
+    url = (
+        "https://home.treasury.gov/resource-center/data-chart-center/"
+        f"interest-rates/TextView?type=daily_treasury_yield_curve&field_tdr_date_value={year}"
+    )
+    headers = {"User-Agent": "Mozilla/5.0"}
+    resp = requests.get(url, headers=headers, timeout=25)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "lxml")
+    table = None
+    for t in soup.find_all("table"):
+        if t.find(class_=lambda c: c and "field-bc-10year" in c):
+            table = t
+            break
+    if table is None:
+        raise ValueError("Treasury CMT table not found")
+    rows = table.find_all("tr")
+    if len(rows) < 2:
+        raise ValueError("Treasury CMT table empty")
+    header = [th.get_text(" ", strip=True) for th in rows[0].find_all(["th", "td"])]
+    last = [td.get_text(" ", strip=True) for td in rows[-1].find_all(["th", "td"])]
+    raw = dict(zip(header, last))
+    mapping = {
+        "1 Mo": "1M", "3 Mo": "3M", "6 Mo": "6M", "1 Yr": "1Y",
+        "2 Yr": "2Y", "3 Yr": "3Y", "5 Yr": "5Y", "7 Yr": "7Y",
+        "10 Yr": "10Y", "20 Yr": "20Y", "30 Yr": "30Y",
+    }
+    yields = {}
+    for src, dst in mapping.items():
+        val = raw.get(src)
+        if val and val not in ("N/A", "", "NA"):
+            yields[dst] = float(val)
+    if len(yields) < 5:
+        raise ValueError(f"Insufficient Treasury yields: {raw}")
+    yields["as_of"] = f"{raw.get('Date', '')} (Treasury.gov CMT)"
+    yields["source"] = "treasury_cmt"
+    return yields
+
+
 def scrape_wsj_yields() -> dict:
     """
     Attempt to scrape current Treasury yields from WSJ.
@@ -89,7 +130,12 @@ def get_yield_curve() -> dict:
     Return current yield curve + derived spreads.
     Always returns a usable dict.
     """
-    y = scrape_wsj_yields()
+    try:
+        y = fetch_treasury_cmt()
+        print(f"Treasury CMT OK · {y.get('as_of')}")
+    except Exception as e:
+        print(f"Treasury CMT failed ({e}) — trying WSJ")
+        y = scrape_wsj_yields()
     
     # Derived spreads
     spreads = {}

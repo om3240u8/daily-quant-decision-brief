@@ -18,6 +18,12 @@ from src.gauges.core import run_all_gauges
 from src.gauges.history import compute_gauge_history
 from src.themes.radar import compute_theme_metrics
 from src.pipeline.events import get_upcoming_events, events_to_html
+from src.pipeline.policy_pricing import (
+    collect_policy_pricing,
+    policy_card_html,
+    policy_insight,
+    policy_scenarios,
+)
 from src.analogs.historical import find_similar_regimes
 from src.config import EQUITIES, REPORT_TITLE, CRYPTO, COMMODITIES, CREDIT
 
@@ -78,7 +84,7 @@ def _range_bar_html(score, p5, p95, min_v, max_v, theor_lo=None, theor_hi=None, 
     """
 
 
-def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
+def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M HKT")
     risk = gauges.get("risk_on_off", {})
     vrp = gauges.get("vol_risk_premium", {})
@@ -181,8 +187,25 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
           <td>{m1.get('n', 0)}</td>
         </tr>"""
 
-    events = get_upcoming_events(35)
+    events = get_upcoming_events(45)
     events_html = events_to_html(events)
+
+    if policy is None:
+        try:
+            policy = collect_policy_pricing()
+        except Exception as e:
+            print(f"policy_pricing failed: {e}")
+            policy = {"ok": False}
+    policy_html = policy_card_html(policy)
+    policy_bullet = policy_insight(policy)
+    scenarios = policy_scenarios(policy)
+    scen_html = ""
+    for s in scenarios:
+        pct = f"{100.0 * s['p']:.0f}%"
+        scen_html += (
+            f"<div class=\"scenario\"><strong>{s['title']}</strong> · {pct}<br>"
+            f"<small>{s['text']}</small></div>\n"
+        )
 
     # ~1Y multi-gauge chart
     chart_dates = json.dumps(hist.get("dates", [])[-55:])
@@ -297,6 +320,17 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
   .scenario {{ background: #1a2332; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }}
   .two-col {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }}
   .footnote {{ font-size: 0.72rem; color: var(--muted); margin-top: 6px; }}
+  .table-scroll {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
+  .policy-card {{
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; margin: 0 0 14px;
+  }}
+  .policy-head {{ display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }}
+  .policy-sub {{ font-size: 0.72rem; color: var(--muted); }}
+  .basis-chip {{
+    font-size: 0.72rem; font-weight: 600; border-radius: 999px;
+    padding: 3px 9px; white-space: nowrap;
+  }}
   .chart-wrap {{
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     padding: 12px; margin-bottom: 12px;
@@ -447,15 +481,23 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
     <li><strong>Vol:</strong> {vrp.get('interpretation', '')}</li>
     <li><strong>Liquidity:</strong> {liq.get('interpretation', '')}</li>
     <li><strong>Analogs:</strong> {analogs.get('narrative', '')}</li>
+    <li><strong>Policy:</strong> {policy_bullet}</li>
   </ul>
-  <p class="footnote">[1] Risk-On/Off now includes a light inverted USD-strength term. [2] Liquidity includes inverted USD (63d primary + 21d) as global funding proxy. [3] Curve slope — Estrella-type + ACM. Data: WSJ / Yahoo.</p>
+  <p class="footnote">[1] Risk-On/Off now includes a light inverted USD-strength term. [2] Liquidity includes inverted USD (63d primary + 21d) as global funding proxy. [3] Curve slope — Estrella-type + ACM. Data: WSJ / Yahoo. [4] Policy card = Kalshi + Polymarket statement books vs ZQ-implied path (no CME FedWatch API).</p>
+</div>
+
+<!-- Policy pricing -->
+<div class="section">
+  <h2>Policy Pricing — Next FOMC</h2>
+  {policy_html}
+  <p class="footnote">Kalshi / Polymarket pay on the announced target-range change. ZQ settles on the calendar-month average EFFR and is inverted with a mid-month day count. A wide basis means the two objects have diverged — not that one venue is "wrong."</p>
 </div>
 
 <!-- Events -->
 <div class="section">
   <h2>High-Impact Event Calendar</h2>
   {events_html}
-  <p class="footnote">Curated high-impact releases. Impact weighting is judgmental based on typical market sensitivity.</p>
+  <p class="footnote">Official BLS / BEA / Fed schedule. Impact weighting is judgmental based on typical market sensitivity.</p>
 </div>
 
 <!-- Yield Curve -->
@@ -531,16 +573,9 @@ def build_html(prices, metrics, gauges, themes, analogs, hist) -> str:
 
 <!-- Scenarios -->
 <div class="section">
-  <h2>Near-Term Scenarios (1–3 months)</h2>
-  <div class="scenario"><strong>Base – Soft-landing continuation</strong> · ~45%<br>
-    <small>Risk-on persists, curve mildly steep, VRP normal, liquidity supportive. Equities + credit grind higher.</small></div>
-  <div class="scenario"><strong>Re-acceleration / sticky inflation</strong> · ~25%<br>
-    <small>Yields rise, curve steepens, growth multiples compress.</small></div>
-  <div class="scenario"><strong>Growth scare</strong> · ~20%<br>
-    <small>Curve flattens/re-inverts, credit widens, defensives outperform.</small></div>
-  <div class="scenario"><strong>Policy / geo shock</strong> · ~10%<br>
-    <small>Sharp risk-off, VIX spike, flight to USD/Treasuries/Gold. Liquidity would deteriorate.</small></div>
-  <p class="footnote">Probabilities = structured judgment anchored to current gauge configuration + historical transition frequencies.</p>
+  <h2>Near-Term Scenarios (into / through next FOMC)</h2>
+  {scen_html}
+  <p class="footnote">Hold / hike weights anchored to live event-book prices when available, else ZQ bucket. Path and shock legs are residual mass, not a fourth independent forecast.</p>
 </div>
 
 <!-- Methodology appendix -->
@@ -586,6 +621,16 @@ slope_10y3m = y_10Y − y_3M</pre>
     <pre style="background:#0d1117;padding:8px 10px;border-radius:6px;font-size:0.78rem;overflow-x:auto;color:#c9d1d9;">score = Δ(HYG / LQD)_1M</pre>
     <p style="margin:6px 0 12px;font-size:0.78rem;color:var(--muted);">Risk-On Credit if &gt; +1% · Risk-Off Credit if &lt; −1% · else Neutral</p>
 
+    <p><strong>6. Policy pricing (next FOMC)</strong></p>
+    <pre style="background:#0d1117;padding:8px 10px;border-radius:6px;font-size:0.78rem;overflow-x:auto;color:#c9d1d9;">ZQ implied avg EFFR = 100 − P_ZQ
+r_post = (N·avg − n_pre·EFFR) / n_post
+E[Δ bp] = 100 · (r_post − EFFR)
+P_hike_ZQ ≈ clip(E[Δ bp] / 25, 0, 1)     // hold = 1 − hike if E[Δ]≥0
+
+Kalshi / Polymarket: mid(yes bid, ask) on the meeting ladder
+basis = P_hike_ZQ − 0.5·(P_hike_Kalshi + P_hike_Poly)</pre>
+    <p style="margin:6px 0 12px;font-size:0.78rem;color:var(--muted);">Labelled ZQ-implied — not CME FedWatch. Event books price the statement; ZQ prices the month-average effective rate.</p>
+
     <p><strong>Range bars</strong></p>
     <p style="margin:4px 0 8px;font-size:0.78rem;color:var(--muted);">
       Track scaled to the theoretical normalised interval when the gauge is clipped
@@ -604,6 +649,8 @@ slope_10y3m = y_10Y − y_3M</pre>
     <ul>
       <li>U.S. Treasury yields: WSJ Market Data – Bonds / Treasury.gov (agent-refreshed when scrape fails)</li>
       <li>Asset prices: Yahoo Finance (yfinance)</li>
+      <li>FOMC event books: Kalshi Trade API (unauth) series KXFEDDECISION; Polymarket Gamma events API</li>
+      <li>ZQ month-code last: Yahoo Finance (e.g. ZQU26.CBT) · EFFR / DFEDTARU: FRED public CSV</li>
     </ul>
     <p><strong>Selected Research Anchors</strong></p>
     <ul>
@@ -620,7 +667,7 @@ slope_10y3m = y_10Y − y_3M</pre>
 </details>
 
 <footer>
-  Daily Quant Decision Brief · Enhanced 2026-08-22 · Yield curve: WSJ · Not investment advice
+  Daily Quant Decision Brief · Policy card 2026-09-04 · Yield curve: WSJ · Not investment advice
 </footer>
 
 <script>
@@ -957,7 +1004,15 @@ def main():
     print("Analogs episodes:", analogs.get("n_episodes"), "|", analogs.get("regime"))
     print("History points:", len(hist.get("dates", [])))
 
-    html = build_html(prices, metrics, gauges, themes, analogs, hist)
+    print("Fetching policy pricing (Kalshi / Polymarket / ZQ)...")
+    try:
+        policy = collect_policy_pricing()
+        print("Policy venues:", policy.get("venues_ok"), "basis", policy.get("basis_hike"))
+    except Exception as e:
+        print(f"policy_pricing failed: {e}")
+        policy = {"ok": False}
+
+    html = build_html(prices, metrics, gauges, themes, analogs, hist, policy=policy)
 
     out_dir = Path(__file__).resolve().parents[2] / "output"
     out_dir.mkdir(exist_ok=True)

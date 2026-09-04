@@ -1,89 +1,86 @@
 """
-High-impact event calendar and narrative drivers.
-Weighted by typical market impact. Structure allows easy daily update.
+High-impact event calendar.
+Dates are official release/meeting schedule (not market prices).
+Refresh after each FOMC / when BLS-BEA calendars roll.
 """
 
 from datetime import datetime, timedelta
 
-# Near-term high-impact events (manually curated for quality; expand with scrapers later)
-# Format: date, event, region, expected impact (High/Med), notes
-
 EVENTS = [
     {
-        "date": "2026-08-12",
-        "event": "US CPI (July)",
-        "region": "US",
-        "impact": "High",
-        "notes": "Key inflation print for Fed path pricing"
-    },
-    {
-        "date": "2026-08-14",
-        "event": "US Retail Sales",
-        "region": "US",
-        "impact": "Med",
-        "notes": "Consumption momentum"
-    },
-    {
-        "date": "2026-08-15",
-        "event": "US Industrial Production / Capacity Util.",
-        "region": "US",
-        "impact": "Med",
-        "notes": ""
-    },
-    {
-        "date": "2026-08-20",
-        "event": "FOMC Minutes",
-        "region": "US",
-        "impact": "High",
-        "notes": "Tone on rates and balance sheet"
-    },
-    {
-        "date": "2026-08-22",
-        "event": "Jackson Hole Symposium begins",
-        "region": "US",
-        "impact": "High",
-        "notes": "Fed Chair speech historically market-moving"
-    },
-    {
-        "date": "2026-08-27",
-        "event": "US GDP (2nd estimate) / Pending Home Sales",
-        "region": "US",
-        "impact": "Med",
-        "notes": ""
-    },
-    {
-        "date": "2026-09-01",
-        "event": "ISM Manufacturing",
-        "region": "US",
-        "impact": "Med-High",
-        "notes": "Growth pulse"
-    },
-    {
-        "date": "2026-09-05",
+        "date": "2026-09-04",
         "event": "US Employment Report (NFP)",
         "region": "US",
         "impact": "High",
-        "notes": "Critical for Fed"
-    },
-    # International placeholders – expand as needed
-    {
-        "date": "2026-08-19",
-        "event": "RBA Minutes / Australia data cluster",
-        "region": "AU",
-        "impact": "Med",
-        "notes": ""
+        "notes": "08:30 ET · first binary that can reopen Sep FOMC basis",
     },
     {
-        "date": "2026-08-21",
-        "event": "ECB speakers / Eurozone data",
-        "region": "EU",
+        "date": "2026-09-07",
+        "event": "US Labor Day (markets closed)",
+        "region": "US",
         "impact": "Med",
-        "notes": "Watch for policy divergence vs Fed"
+        "notes": "NYSE/NASDAQ closed",
+    },
+    {
+        "date": "2026-09-10",
+        "event": "US PPI + ECB decision window",
+        "region": "US/EU",
+        "impact": "Med-High",
+        "notes": "PPI 08:30 ET; watch ECB same week",
+    },
+    {
+        "date": "2026-09-11",
+        "event": "US CPI (August)",
+        "region": "US",
+        "impact": "High",
+        "notes": "08:30 ET · last major print before 16 Sep FOMC",
+    },
+    {
+        "date": "2026-09-16",
+        "event": "FOMC decision + SEP / presser",
+        "region": "US",
+        "impact": "High",
+        "notes": "14:00 ET statement · Warsh presser 14:30 · SEP meeting",
+    },
+    {
+        "date": "2026-09-30",
+        "event": "US PCE / GDP 3rd est.",
+        "region": "US",
+        "impact": "High",
+        "notes": "Fed preferred inflation gauge",
+    },
+    {
+        "date": "2026-10-02",
+        "event": "US Employment Report (NFP)",
+        "region": "US",
+        "impact": "High",
+        "notes": "Post-Sep FOMC labor print",
+    },
+    {
+        "date": "2026-10-14",
+        "event": "US CPI (September)",
+        "region": "US",
+        "impact": "High",
+        "notes": "",
+    },
+    {
+        "date": "2026-10-28",
+        "event": "FOMC decision",
+        "region": "US",
+        "impact": "High",
+        "notes": "14:00 ET · no SEP",
+    },
+    {
+        "date": "2026-12-09",
+        "event": "FOMC decision + SEP",
+        "region": "US",
+        "impact": "High",
+        "notes": "Year-end path / dots",
     },
 ]
 
+
 def get_upcoming_events(days_ahead: int = 30) -> list:
-    """Return events in the next N days, sorted."""
     today = datetime.now().date()
     upcoming = []
     for e in EVENTS:
@@ -99,7 +96,7 @@ def get_upcoming_events(days_ahead: int = 30) -> list:
 def events_to_html(events: list) -> str:
     if not events:
         return "<p style='color:var(--muted)'>No high-impact events in the immediate window.</p>"
-    
+
     rows = ""
     for e in events:
         impact_color = "#f85149" if e["impact"] == "High" else "#d29922"
@@ -108,14 +105,16 @@ def events_to_html(events: list) -> str:
           <td>{e['date'][5:]}</td>
           <td>{e['event']}</td>
           <td>{e['region']}</td>
-          <td style="color:{impact_color};font-weight:600">{e['impact']}</td>
-          <td style="color:var(--muted);font-size:0.8rem">{e.get('notes','')}</td>
+          <td style='color:{impact_color};font-weight:600'>{e['impact']}</td>
+          <td style='color:var(--muted);font-size:0.8rem'>{e.get('notes','')}</td>
         </tr>"""
     return f"""
+    <div class='table-scroll'>
     <table>
       <thead>
         <tr><th>Date</th><th>Event</th><th>Region</th><th>Impact</th><th>Notes</th></tr>
       </thead>
       <tbody>{rows}</tbody>
     </table>
+    </div>
     """
