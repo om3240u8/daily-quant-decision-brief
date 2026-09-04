@@ -105,11 +105,11 @@ def events_to_html(events: list) -> str:
           <td>{e['date'][5:]}</td>
           <td>{e['event']}</td>
           <td>{e['region']}</td>
-          <td style=\"color:{impact_color};font-weight:600\">{e['impact']}</td>
-          <td style=\"color:var(--muted);font-size:0.8rem\">{e.get('notes','')}</td>
+          <td style='color:{impact_color};font-weight:600'>{e['impact']}</td>
+          <td style='color:var(--muted);font-size:0.8rem'>{e.get('notes','')}</td>
         </tr>"""
     return f"""
-    <div class=\"table-scroll\">
+    <div class='table-scroll'>
     <table>
       <thead>
         <tr><th>Date</th><th>Event</th><th>Region</th><th>Impact</th><th>Notes</th></tr>
