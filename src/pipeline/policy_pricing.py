@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.pipeline.policy_fetch import (
     next_fomc, days_to, fetch_kalshi, fetch_polymarket, fetch_effr, fetch_zq,
-    invert_meeting, _event_blend,
+    invert_meeting, _event_blend, add_month,
 )
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "policy_pricing"
@@ -15,15 +15,19 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 def collect_policy_pricing(today=None):
     today = today or date.today()
     meeting = next_fomc(today)
-    kalshi, poly, effr, zq = fetch_kalshi(meeting), fetch_polymarket(meeting), fetch_effr(), fetch_zq(meeting)
-    inv, event = invert_meeting(zq, effr, meeting), _event_blend(kalshi, poly)
+    kalshi, poly, effr = fetch_kalshi(meeting), fetch_polymarket(meeting), fetch_effr()
+    zq, zq_next = fetch_zq(meeting), fetch_zq(add_month(meeting))
+    inv, event = invert_meeting(zq, effr, meeting, zq_next=zq_next), _event_blend(kalshi, poly)
     basis_ok = bool(inv.get("ok") and event["hike"] is not None)
     venues_ok = [n for n, ok in (("kalshi", kalshi.get("ok")), ("polymarket", poly.get("ok")), ("zq", inv.get("ok"))) if ok]
+    method = inv.get("method") or "n/a"
     snap = {"ok": bool(venues_ok), "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "meeting": meeting.isoformat(), "days_ahead": days_to(meeting, today),
-            "kalshi": kalshi, "polymarket": poly, "effr": effr, "zq": zq, "zq_implied": inv, "event": event,
+            "kalshi": kalshi, "polymarket": poly, "effr": effr, "zq": zq, "zq_next": zq_next,
+            "zq_implied": inv, "event": event,
             "basis_hike": (inv["p_hike"] - event["hike"]) if basis_ok else None, "basis_ok": basis_ok,
-            "venues_ok": venues_ok, "label": "ZQ-implied (not CME FedWatch)"}
+            "venues_ok": venues_ok,
+            "label": f"ZQ path · {method} (not CME FedWatch)"}
     try:
         DATA_DIR.joinpath("latest.json").write_text(json.dumps(snap, indent=2), encoding="utf-8")
         with DATA_DIR.joinpath("history.jsonl").open("a", encoding="utf-8") as f:
@@ -31,7 +35,8 @@ def collect_policy_pricing(today=None):
                                 "p_hold_kalshi": kalshi.get("hold"), "p_hike_kalshi": kalshi.get("hike_25"),
                                 "p_hold_poly": poly.get("hold"), "p_hike_poly": poly.get("hike_25"),
                                 "p_hike_zq": inv.get("p_hike"), "implied_bp": inv.get("implied_bp"),
-                                "zq_px": zq.get("price"), "venues_ok": venues_ok}) + "\n")
+                                "zq_px": zq.get("price"), "zq_next_px": zq_next.get("price"),
+                                "method": inv.get("method"), "venues_ok": venues_ok}) + "\n")
     except Exception as e:
         print(f"policy_pricing persist failed: {e}")
     return snap
@@ -62,7 +67,10 @@ def policy_insight(snap):
     elif p.get("ok"):
         parts.append(f"Poly hold {_pct(p.get('hold'))} / hike {_pct(p.get('hike_25'))} (Kalshi missing).")
     if inv.get("ok"):
-        parts.append(f"ZQ-implied path +{inv.get('implied_bp')}bp → bucket hike {_pct(inv.get('p_hike'))} (not CME FedWatch).")
+        meth = inv.get("method") or "zq"
+        parts.append(f"ZQ {meth} path +{inv.get('implied_bp')}bp → bucket hike {_pct(inv.get('p_hike'))} (not CME FedWatch).")
+    elif inv.get("error"):
+        parts.append(f"ZQ path n/a ({inv.get('error')}).")
     basis = snap.get("basis_hike")
     if snap.get("basis_ok") and basis is not None:
         note = "tight" if abs(basis) < 0.05 else ("watch" if abs(basis) < 0.10 else "wide")
@@ -78,24 +86,26 @@ def policy_scenarios(snap):
     raw = [hold_p, hike_p, 0.12, 0.08]
     s = sum(raw) or 1.0
     w = [x / s for x in raw]
-    later = (f"ZQ strip still prices ~{implied_bp:+.0f}bp into this meeting month and further tightening by year-end. Hold in Sep does not kill the path."
-             if implied_bp is not None else "ZQ path still tighter by year-end even if September is a hold.")
+    later = (f"ZQ strip still prices ~{implied_bp:+.0f}bp into this meeting month. Sep already delivered +25bp to 3.75–4.00%; dots still lean to another hike in 2026."
+             if implied_bp is not None else "Sep delivered +25bp. Path risk is now Oct 28 / Dec 9.")
     return [
-        {"title": "Hold at Sep meeting", "p": w[0], "text": "Statement unchanged 15–16 Sep. Residual risk is SEP / Warsh presser, not the funds rate."},
-        {"title": "+25bp at Sep meeting", "p": w[1], "text": "Target 3.75–4.00%. Front end cheapens; USD/oil already in the price if the ZQ–event basis is tight."},
-        {"title": "Skip Sep, hike by Dec", "p": w[2], "text": later},
-        {"title": "Data / geo shock", "p": w[3], "text": "NFP/CPI miss or oil spike re-opens a 10pp+ basis. Event books usually move first on the headline; ZQ moves on the path."},
+        {"title": "Hold at Oct 28 meeting", "p": w[0], "text": "Funds stay 3.75–4.00%. Residual risk is Warsh tone and the Dec SEP, not the October print."},
+        {"title": "+25bp at Oct 28 meeting", "p": w[1], "text": "Target 4.00–4.25%. Aligns with the Sep dots (majority at least one more hike in 2026)."},
+        {"title": "Skip Oct, hike by Dec", "p": w[2], "text": later},
+        {"title": "Data / geo shock", "p": w[3], "text": "NFP 2 Oct / CPI 14 Oct or an oil spike can reopen a 10pp+ basis. Event books move first on the headline; ZQ moves on the path."},
     ]
 
 def policy_card_html(snap):
     if not snap:
         return "<p class='footnote'>Policy pricing unavailable.</p>"
     k, p, inv = snap.get("kalshi") or _empty_venue(), snap.get("polymarket") or _empty_venue(), snap.get("zq_implied") or {}
-    zq, effr = snap.get("zq") or {}, snap.get("effr") or {}
+    zq, zq_next, effr = snap.get("zq") or {}, snap.get("zq_next") or {}, snap.get("effr") or {}
     chip_color, chip_txt = _basis_chip(snap.get("basis_hike"), snap.get("basis_ok"))
     venues = ", ".join(snap.get("venues_ok") or []) or "none"
     stale = "" if snap.get("ok") else " · INCOMPLETE"
     avg = f"{zq['implied_avg']:.3f}%" if zq.get("implied_avg") is not None else "–"
+    nxt = f"{zq_next['implied_avg']:.3f}%" if zq_next.get("implied_avg") is not None else "–"
+    zq_object = "path (next-mo ZQ)" if inv.get("method") == "next_month" else "month-avg EFFR"
     return f"""
     <div class='policy-card'>
       <div class='policy-head'>
@@ -111,10 +121,10 @@ def policy_card_html(snap):
         <tbody>
           <tr><td>Kalshi</td><td>{_pct(k.get('hold'))}</td><td>{_pct(k.get('hike_25'))}</td><td>{_pct(k.get('hike_50'))} / {_pct(k.get('cut_25'))}</td><td>statement</td></tr>
           <tr><td>Polymarket</td><td>{_pct(p.get('hold'))}</td><td>{_pct(p.get('hike_25'))}</td><td>{_pct(p.get('hike_50'))} / {_pct(p.get('cut_25'))}</td><td>statement</td></tr>
-          <tr><td>ZQ-implied</td><td>{_pct(inv.get('p_hold'))}</td><td>{_pct(inv.get('p_hike'))}</td><td>{_pct(inv.get('p_cut'))}</td><td>month-avg EFFR</td></tr>
+          <tr><td>ZQ path</td><td>{_pct(inv.get('p_hold'))}</td><td>{_pct(inv.get('p_hike'))}</td><td>{_pct(inv.get('p_cut'))}</td><td>{zq_object}</td></tr>
         </tbody>
       </table>
       </div>
-      <p class='footnote'>ZQ {zq.get('ticker') or '–'} last {zq.get('price') if zq.get('price') is not None else '–'} → implied avg {avg} · EFFR {effr.get('effr') if effr.get('effr') is not None else '–'}% ({effr.get('as_of') or '–'}) · invert {inv.get('implied_bp') if inv.get('implied_bp') is not None else '–'} bp · venues {venues}{stale} · Poly slug {p.get('slug') or '–'}</p>
+      <p class='footnote'>ZQ {zq.get('ticker') or '–'} last {zq.get('price') if zq.get('price') is not None else '–'} → month avg {avg} · next {zq_next.get('ticker') or '–'} avg {nxt} · pre {inv.get('pre_rate') if inv.get('pre_rate') is not None else '–'} ({inv.get('pre_source') or '–'}) · {inv.get('method') or '–'} Δ {inv.get('implied_bp') if inv.get('implied_bp') is not None else '–'} bp · Oct–Nov {inv.get('spread_on_bp') if inv.get('spread_on_bp') is not None else '–'} bp · same-mo check {inv.get('same_month_bp') if inv.get('same_month_bp') is not None else '–'} bp · EFFR {effr.get('effr') if effr.get('effr') is not None else '–'}% ({effr.get('as_of') or '–'}) · venues {venues}{stale} · Poly slug {p.get('slug') or '–'}</p>
     </div>
     """
