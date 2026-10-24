@@ -197,6 +197,148 @@ def credit_gauge(prices: pd.DataFrame) -> Dict[str, Any]:
     return result
 
 
+# ---------- Selective Risk Monitors ----------
+
+def sovereign_relative_gauge(prices: pd.DataFrame = None) -> Dict[str, Any]:
+    """
+    Placeholder for OAT-Bund / BTP-Bund relative stress.
+    Live series required; returns Neutral until injected.
+    """
+    return {
+        "score": 0.0,
+        "label": "Neutral Sovereign",
+        "components": {},
+        "interpretation": "Sovereign relative spreads stable (live OAT-Bund series required for full signal)."
+    }
+
+
+def safe_haven_fx_gauge(prices: pd.DataFrame) -> Dict[str, Any]:
+    """
+    JPY + CHF strength vs USD.
+    Average of FXY and FXF relative to UUP. Positive = safe-haven bid.
+    """
+    result = {"score": None, "label": "N/A", "components": {}, "interpretation": ""}
+    needed = ["FXY", "UUP"]
+    if not all(t in prices.columns for t in needed):
+        return result
+
+    fxy = prices["FXY"].dropna()
+    uup = prices["UUP"].dropna()
+    if len(fxy) < 22 or len(uup) < 22:
+        return result
+
+    fxy_ret = float(fxy.iloc[-1] / fxy.iloc[-22] - 1)
+    uup_ret = float(uup.iloc[-1] / uup.iloc[-22] - 1)
+    components = {"fxy_1m": round(fxy_ret, 4), "uup_1m": round(uup_ret, 4)}
+
+    # CHF if available
+    if "FXF" in prices.columns:
+        fxf = prices["FXF"].dropna()
+        if len(fxf) >= 22:
+            fxf_ret = float(fxf.iloc[-1] / fxf.iloc[-22] - 1)
+            components["fxf_1m"] = round(fxf_ret, 4)
+            relative = (fxy_ret + fxf_ret) / 2 - uup_ret
+        else:
+            relative = fxy_ret - uup_ret
+    else:
+        relative = fxy_ret - uup_ret
+
+    components["relative"] = round(relative, 4)
+    result["components"] = components
+    result["score"] = round(relative, 4)
+
+    if relative > 0.015:
+        result["label"] = "Risk-Off FX"
+        result["interpretation"] = "JPY + CHF outperforming USD — safe-haven bid."
+    elif relative < -0.015:
+        result["label"] = "Risk-On FX"
+        result["interpretation"] = "USD outperforming JPY/CHF — risk appetite in FX."
+    else:
+        result["label"] = "Neutral FX"
+        result["interpretation"] = "Safe-haven FX (JPY + CHF) relative performance stable."
+    return result
+
+
+def cross_asset_correlation_gauge(prices: pd.DataFrame) -> Dict[str, Any]:
+    """20-day average pairwise correlation of SPY, HYG, EEM."""
+    result = {"score": None, "label": "N/A", "components": {}, "interpretation": ""}
+    tickers = [t for t in ["SPY", "HYG", "EEM"] if t in prices.columns]
+    if len(tickers) < 2:
+        return result
+
+    rets = prices[tickers].pct_change().dropna()
+    if len(rets) < 20:
+        return result
+
+    corr_matrix = rets.iloc[-20:].corr()
+    avg_corr = corr_matrix.where(~np.eye(len(tickers), dtype=bool)).stack().mean()
+    result["components"] = {"avg_corr_20d": round(float(avg_corr), 3)}
+    result["score"] = round(float(avg_corr), 3)
+
+    if avg_corr > 0.65:
+        result["label"] = "High Correlation"
+        result["interpretation"] = "Cross-asset correlation elevated — selective stress may be spilling over."
+    elif avg_corr > 0.40:
+        result["label"] = "Moderate Correlation"
+        result["interpretation"] = "Correlations rising but not yet systemic."
+    else:
+        result["label"] = "Low Correlation"
+        result["interpretation"] = "Cross-asset moves still differentiated."
+    return result
+
+
+def liquidity_functioning_gauge(prices: pd.DataFrame) -> Dict[str, Any]:
+    """HYG 21-day realized vol as a simple functioning proxy."""
+    result = {"score": None, "label": "N/A", "components": {}, "interpretation": ""}
+    if "HYG" not in prices.columns:
+        return result
+
+    hyg = prices["HYG"].dropna()
+    if len(hyg) < 21:
+        return result
+
+    vol_21 = float(hyg.pct_change().iloc[-21:].std() * np.sqrt(252))
+    result["components"] = {"hyg_realized_vol": round(vol_21, 3)}
+    result["score"] = round(vol_21, 3)
+
+    if vol_21 > 0.12:
+        result["label"] = "Stressed Functioning"
+        result["interpretation"] = "HY realized vol elevated — credit market functioning under pressure."
+    elif vol_21 > 0.08:
+        result["label"] = "Elevated Functioning"
+        result["interpretation"] = "Moderate stress in credit market functioning."
+    else:
+        result["label"] = "Normal Functioning"
+        result["interpretation"] = "Credit market functioning appears orderly."
+    return result
+
+
+def funding_stress_gauge(prices: pd.DataFrame) -> Dict[str, Any]:
+    """Yen 1M strength as a simple funding/carry stress proxy."""
+    result = {"score": None, "label": "N/A", "components": {}, "interpretation": ""}
+    if "FXY" not in prices.columns:
+        return result
+
+    fxy = prices["FXY"].dropna()
+    if len(fxy) < 22:
+        return result
+
+    fxy_1m = float(fxy.iloc[-1] / fxy.iloc[-22] - 1)
+    result["components"] = {"fxy_1m": round(fxy_1m, 4)}
+    result["score"] = round(fxy_1m, 4)
+
+    if fxy_1m > 0.02:
+        result["label"] = "Funding Stress"
+        result["interpretation"] = "Yen strengthening sharply — potential carry/funding stress."
+    elif fxy_1m > 0.01:
+        result["label"] = "Mild Funding Stress"
+        result["interpretation"] = "Yen firming — mild funding pressure."
+    else:
+        result["label"] = "Normal Funding"
+        result["interpretation"] = "No significant funding stress signal from yen."
+    return result
+
+
 def run_all_gauges(prices: pd.DataFrame) -> Dict[str, Any]:
     return {
         "risk_on_off": risk_on_off(prices),
@@ -204,5 +346,11 @@ def run_all_gauges(prices: pd.DataFrame) -> Dict[str, Any]:
         "vol_risk_premium": vol_risk_premium(prices),
         "credit": credit_gauge(prices),
         "liquidity": liquidity_gauge(prices),
+        # Selective risk monitors
+        "sovereign_relative": sovereign_relative_gauge(prices),
+        "safe_haven_fx": safe_haven_fx_gauge(prices),
+        "cross_asset_corr": cross_asset_correlation_gauge(prices),
+        "liquidity_functioning": liquidity_functioning_gauge(prices),
+        "funding_stress": funding_stress_gauge(prices),
         "generated_at": pd.Timestamp.now().isoformat()
     }

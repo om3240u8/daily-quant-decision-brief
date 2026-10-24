@@ -100,11 +100,43 @@ def _vrp_at(prices: pd.DataFrame, end_loc: int) -> float:
     return current_vix - realized
 
 
+def _safe_haven_fx_at(prices: pd.DataFrame, end_loc: int) -> float:
+    if "FXY" not in prices.columns or "UUP" not in prices.columns:
+        return np.nan
+    fxy = prices["FXY"].iloc[:end_loc + 1].dropna()
+    uup = prices["UUP"].iloc[:end_loc + 1].dropna()
+    if len(fxy) < 22 or len(uup) < 22:
+        return np.nan
+    return float(fxy.iloc[-1] / fxy.iloc[-22] - 1) - float(uup.iloc[-1] / uup.iloc[-22] - 1)
+
+
+def _cross_asset_corr_at(prices: pd.DataFrame, end_loc: int) -> float:
+    tickers = [t for t in ["SPY", "HYG", "EEM"] if t in prices.columns]
+    if len(tickers) < 2:
+        return np.nan
+    window = prices[tickers].iloc[:end_loc + 1].pct_change().dropna()
+    if len(window) < 20:
+        return np.nan
+    corr = window.iloc[-20:].corr()
+    avg = corr.where(~np.eye(len(tickers), dtype=bool)).stack().mean()
+    return float(avg)
+
+
+def _hyg_vol_at(prices: pd.DataFrame, end_loc: int) -> float:
+    if "HYG" not in prices.columns:
+        return np.nan
+    hyg = prices["HYG"].iloc[:end_loc + 1].dropna()
+    if len(hyg) < 22:
+        return np.nan
+    return float(hyg.pct_change().iloc[-21:].std() * np.sqrt(252))
+
+
 def compute_gauge_history(prices: pd.DataFrame,
                           lookback_days: int = 756,
                           step: int = 5) -> Dict[str, Any]:
     """
     Return sparse time series of Risk, Liquidity, VRP scores + discrete regime labels.
+    Also selective monitors: safe-haven FX relative, cross-asset corr, HYG vol.
     lookback_days ≈ 3y trading days; step=5 keeps it fast.
     """
     n = len(prices)
@@ -113,12 +145,12 @@ def compute_gauge_history(prices: pd.DataFrame,
 
     start = max(80, n - lookback_days)
     dates, risk, liq, vrp, regimes = [], [], [], [], []
+    sh_fx, xcorr, hyg_vol = [], [], []
 
     for i in range(start, n, step):
         r = _risk_score_at(prices, i)
         l = _liq_score_at(prices, i)
         v = _vrp_at(prices, i)
-        # discrete regime for the block view (simplified 3-state on risk)
         if r > 0.4:
             reg = "RiskOn"
         elif r < -0.4:
@@ -130,6 +162,9 @@ def compute_gauge_history(prices: pd.DataFrame,
         liq.append(round(l, 3))
         vrp.append(round(v, 2) if not np.isnan(v) else None)
         regimes.append(reg)
+        sh_fx.append(round(_safe_haven_fx_at(prices, i), 4) if not np.isnan(_safe_haven_fx_at(prices, i)) else None)
+        xcorr.append(round(_cross_asset_corr_at(prices, i), 3) if not np.isnan(_cross_asset_corr_at(prices, i)) else None)
+        hyg_vol.append(round(_hyg_vol_at(prices, i), 3) if not np.isnan(_hyg_vol_at(prices, i)) else None)
 
     # percentiles for range bars (last ~1Y of the series)
     def pcts(series: List[float]) -> Dict[str, float]:
@@ -152,14 +187,23 @@ def compute_gauge_history(prices: pd.DataFrame,
         "liq": liq,
         "vrp": vrp,
         "regime": regimes,
+        "safe_haven_fx": sh_fx,
+        "cross_asset_corr": xcorr,
+        "hyg_vol": hyg_vol,
         "range_1y": {
             "risk": pcts(risk[one_y:]),
             "liq": pcts(liq[one_y:]),
             "vrp": pcts([x for x in vrp[one_y:] if x is not None]),
+            "safe_haven_fx": pcts([x for x in sh_fx[one_y:] if x is not None]),
+            "cross_asset_corr": pcts([x for x in xcorr[one_y:] if x is not None]),
+            "hyg_vol": pcts([x for x in hyg_vol[one_y:] if x is not None]),
         },
         "range_full": {
             "risk": pcts(risk),
             "liq": pcts(liq),
             "vrp": pcts([x for x in vrp if x is not None]),
+            "safe_haven_fx": pcts([x for x in sh_fx if x is not None]),
+            "cross_asset_corr": pcts([x for x in xcorr if x is not None]),
+            "hyg_vol": pcts([x for x in hyg_vol if x is not None]),
         },
     }

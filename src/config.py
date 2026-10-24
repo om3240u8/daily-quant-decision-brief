@@ -49,6 +49,7 @@ FX = {
     "UUP": "USD Index (proxy)",
     "FXE": "Euro",
     "FXY": "Japanese Yen",
+    "FXF": "Swiss Franc",
     "FXA": "Australian Dollar",
     "CYB": "Chinese Yuan",
 }

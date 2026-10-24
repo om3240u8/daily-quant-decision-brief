@@ -91,6 +91,12 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
     curve = gauges.get("yield_curve", {})
     credit = gauges.get("credit", {})
     liq = gauges.get("liquidity", {})
+    # Selective risk monitors
+    sov = gauges.get("sovereign_relative", {})
+    sh_fx = gauges.get("safe_haven_fx", {})
+    xcorr = gauges.get("cross_asset_corr", {})
+    liq_func = gauges.get("liquidity_functioning", {})
+    fund = gauges.get("funding_stress", {})
 
     us_tickers = ["SPY", "QQQ", "IWM", "VLUE", "MTUM", "QUAL", "USMV"]
     dm_tickers = ["VGK", "EWJ", "EWH"]
@@ -208,10 +214,56 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
         )
 
     # ~1Y multi-gauge chart
+    # Selective monitor history series (for charts + range bars)
     chart_dates = json.dumps(hist.get("dates", [])[-55:])
     chart_risk = json.dumps(hist.get("risk", [])[-55:])
     chart_liq = json.dumps(hist.get("liq", [])[-55:])
     chart_vrp = json.dumps([x if x is not None else None for x in hist.get("vrp", [])[-55:]])
+    chart_shfx = json.dumps([x if x is not None else None for x in hist.get("safe_haven_fx", [])[-55:]])
+    chart_xcorr = json.dumps([x if x is not None else None for x in hist.get("cross_asset_corr", [])[-55:]])
+    chart_hygvol = json.dumps([x if x is not None else None for x in hist.get("hyg_vol", [])[-55:]])
+
+    # Current correlation heatmap (20d pairwise)
+    corr_tickers = [t for t in ["SPY", "HYG", "LQD", "EEM", "FXY", "UUP"] if t in prices.columns]
+    corr_html = "<p class='footnote'>Insufficient data for correlation matrix.</p>"
+    if len(corr_tickers) >= 2:
+        rets = prices[corr_tickers].pct_change().dropna()
+        if len(rets) >= 20:
+            cmat = rets.iloc[-20:].corr()
+            corr_html = '<div class="table-scroll"><table class="corr-table"><thead><tr><th></th>'
+            for t in corr_tickers:
+                corr_html += f"<th>{t}</th>"
+            corr_html += "</tr></thead><tbody>"
+            for i, t1 in enumerate(corr_tickers):
+                corr_html += f"<tr><td><strong>{t1}</strong></td>"
+                for j, t2 in enumerate(corr_tickers):
+                    val = float(cmat.iloc[i, j])
+                    # simple color: red positive, blue negative
+                    if val >= 0.7:
+                        bg = "#8b1e3f"
+                    elif val >= 0.4:
+                        bg = "#c45c26"
+                    elif val >= 0.1:
+                        bg = "#6b4f2a"
+                    elif val <= -0.4:
+                        bg = "#1e4d8b"
+                    else:
+                        bg = "#2d333b"
+                    corr_html += f'<td style="background:{bg};color:#fff;text-align:center">{val:.2f}</td>'
+                corr_html += "</tr>"
+            corr_html += "</tbody></table></div>"
+            corr_html += '<p class="footnote">20-day pairwise correlation. Darker red = higher positive correlation; blue = negative.</p>'
+
+    # Range bars for selective monitors
+    shfx_rng = r1y.get("safe_haven_fx", {})
+    xcorr_rng = r1y.get("cross_asset_corr", {})
+    hygvol_rng = r1y.get("hyg_vol", {})
+    shfx_bar = _range_bar_html(sh_fx.get("score"), shfx_rng.get("p5"), shfx_rng.get("p95"),
+                               shfx_rng.get("min"), shfx_rng.get("max"), decimals=3)
+    xcorr_bar = _range_bar_html(xcorr.get("score"), xcorr_rng.get("p5"), xcorr_rng.get("p95"),
+                                xcorr_rng.get("min"), xcorr_rng.get("max"), decimals=2)
+    hygvol_bar = _range_bar_html(liq_func.get("score"), hygvol_rng.get("p5"), hygvol_rng.get("p95"),
+                                 hygvol_rng.get("min"), hygvol_rng.get("max"), decimals=3)
 
     # ~3Y regime strength panel (full hist)
     dates_full = hist.get("dates", [])
@@ -430,6 +482,8 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
   </div>
 </div>
 
+<!-- Selective monitors removed from top strip — see body detail section -->
+
 <!-- Always-visible gauge history + regime strength (Option C) -->
 <div class="section">
   <h2>Gauge History & Regime Timeline</h2>
@@ -470,6 +524,57 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
   </div>
 
   <p class="footnote">Top chart: last ~1Y multi-gauge (toggles). Bottom: continuous Risk score shows <em>strength</em>; colour bar shows discrete state. Shared date labels. Range bars on cards use theoretical normalised range (Risk [−2,+2], Liq [−1.5,+1.5]).</p>
+</div>
+
+<!-- Correlation (kept) + FX + Major 10Y -->
+<div class="section">
+  <h2>Cross-Asset Correlation</h2>
+  <h3>20-day Pairwise Heatmap</h3>
+  {corr_html}
+  <h3>Series Trends — Correlation & HYG Realized Vol</h3>
+  <div class="chart-wrap">
+    <canvas id="corrVolChart" height="180"></canvas>
+  </div>
+  <p class="footnote">Blue: 20-day average pairwise correlation (SPY/HYG/EEM). Orange: HYG 21-day annualized realized vol.</p>
+</div>
+
+<div class="section">
+  <h2>FX — Safe-Haven Relative (JPY + CHF vs USD)</h2>
+  <p>{sh_fx.get('interpretation', 'N/A')}</p>
+  <table>
+    <thead><tr><th>Series</th><th>1M return</th></tr></thead>
+    <tbody>
+      <tr><td>FXY (JPY)</td><td>{fmt_pct(sh_fx.get('components',{}).get('fxy_1m'))}</td></tr>
+      <tr><td>FXF (CHF)</td><td>{fmt_pct(sh_fx.get('components',{}).get('fxf_1m'))}</td></tr>
+      <tr><td>UUP (USD)</td><td>{fmt_pct(sh_fx.get('components',{}).get('uup_1m'))}</td></tr>
+      <tr><td><strong>Relative (avg JPY+CHF − USD)</strong></td><td><strong>{fmt_pct(sh_fx.get('score'))}</strong></td></tr>
+    </tbody>
+  </table>
+  {shfx_bar}
+  <p class="footnote">Positive relative = JPY + CHF outperforming USD (safe-haven bid). Range bar uses ~1Y historical distribution of the relative series.</p>
+</div>
+
+<div class="section">
+  <h2>Major Country 10Y Yields (with UST)</h2>
+  <p class="footnote">Source: WSJ Bonds as of ~08:20 EDT 23 Oct 2026. Spreads vs German Bund and vs UST.</p>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th>Country</th><th>10Y</th><th>vs Bund (bp)</th><th>vs UST (bp)</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>United States</td><td>4.995</td><td>+164</td><td>—</td></tr>
+      <tr><td>Germany (Bund)</td><td>3.356</td><td>—</td><td>−164</td></tr>
+      <tr><td>France</td><td>5.074</td><td>+172</td><td>+8</td></tr>
+      <tr><td>United Kingdom</td><td>5.362</td><td>+201</td><td>+37</td></tr>
+      <tr><td>Italy</td><td>4.596</td><td>+124</td><td>−40</td></tr>
+      <tr><td>Japan</td><td>2.796</td><td>−56</td><td>−220</td></tr>
+      <tr><td>Australia</td><td>5.173</td><td>+182</td><td>+18</td></tr>
+      <tr><td>China</td><td>1.649</td><td>−171</td><td>−335</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="footnote">France 10Y has moved above UST; OAT-Bund spread ~172 bp (widest since 2011). Bund remains the euro-area core safe haven.</p>
 </div>
 
 <!-- PM Insights -->
@@ -676,6 +781,9 @@ basis = P_hike_ZQ − 0.5·(P_hike_Kalshi + P_hike_Poly)</pre>
   const risk = {chart_risk};
   const liq = {chart_liq};
   const vrp = {chart_vrp};
+  const shfx = {chart_shfx};
+  const xcorr = {chart_xcorr};
+  const hygvol = {chart_hygvol};
   const r3yDates = {regime3y_dates};
   const r3yRisk = {regime3y_risk};
 
@@ -763,6 +871,50 @@ basis = P_hike_ZQ − 0.5·(P_hike_Kalshi + P_hike_Poly)</pre>
     document.getElementById('togRisk').addEventListener('change', syncToggles);
     document.getElementById('togLiq').addEventListener('change', syncToggles);
     document.getElementById('togVrp').addEventListener('change', syncToggles);
+  }}
+
+  // --- Correlation & Vol series chart ---
+  const ctxCV = document.getElementById('corrVolChart');
+  if (ctxCV) {{
+    new Chart(ctxCV, {{
+      type: 'line',
+      data: {{
+        labels: dates,
+        datasets: [
+          {{
+            label: 'X-Asset Corr (20d)',
+            data: xcorr,
+            borderColor: '#58a6ff',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.2,
+            yAxisID: 'y'
+          }},
+          {{
+            label: 'HYG Realized Vol',
+            data: hygvol,
+            borderColor: '#d29922',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.2,
+            yAxisID: 'y1'
+          }}
+        ]
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {{ mode: 'index', intersect: false }},
+        plugins: {{ legend: {{ labels: {{ color: '#c9d1d9', font: {{ size: 11 }} }} }} }},
+        scales: {{
+          x: {{ ticks: {{ maxTicksLimit: 6, color: '#8b949e', font: {{ size: 10 }} }}, grid: {{ color: '#21262d' }} }},
+          y: {{ position: 'left', ticks: {{ color: '#8b949e', font: {{ size: 10 }} }}, grid: {{ color: '#21262d' }}, title: {{ display: true, text: 'Corr', color: '#8b949e' }} }},
+          y1: {{ position: 'right', ticks: {{ color: '#8b949e', font: {{ size: 10 }} }}, grid: {{ drawOnChartArea: false }}, title: {{ display: true, text: 'Vol', color: '#8b949e' }} }}
+        }}
+      }}
+    }});
   }}
 
   // --- Regime strength panel (Option C) with range select + aligned bar ---
