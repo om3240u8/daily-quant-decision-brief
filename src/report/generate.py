@@ -101,7 +101,7 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
     us_tickers = ["SPY", "QQQ", "IWM", "VLUE", "MTUM", "QUAL", "USMV"]
     dm_tickers = ["VGK", "EWJ", "EWH"]
     em_tickers = ["EEM", "FXI", "MCHI", "EWY", "EWT", "INDA", "EWZ"]
-    other_tickers = list(CRYPTO.keys()) + list(COMMODITIES.keys()) + list(CREDIT.keys()) + ["UUP", "^VIX"]
+    other_tickers = list(CRYPTO.keys()) + list(COMMODITIES.keys()) + list(CREDIT.keys()) + ["UUP", "^VIX", "^VXN"]
 
     def make_rows(ticker_list):
         rows = ""
@@ -120,6 +120,8 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
                 name = "USD Index"
             elif t == "^VIX":
                 name = "VIX"
+            elif t == "^VXN":
+                name = "VXN"
             rows += f"""
             <tr>
               <td>{name}<br><small>{t}</small></td>
@@ -691,11 +693,12 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
 
     <p><strong>1. Risk-On / Off</strong> · normalised range <code>[-2, +2]</code></p>
     <p style="margin:4px 0 8px;color:var(--muted);">Composite risk-appetite score. Positive = Risk-On.</p>
-    <pre style="background:#0d1117;padding:8px 10px;border-radius:6px;font-size:0.78rem;overflow-x:auto;color:#c9d1d9;">S = clip( (s_eq + s_credit + s_vix + 0.5·s_btc + 0.45·s_usd) / 2.8 , −2, 2 )
+    <pre style="background:#0d1117;padding:8px 10px;border-radius:6px;font-size:0.78rem;overflow-x:auto;color:#c9d1d9;">S = clip( (s_eq + s_credit + s_vol + 0.5·s_btc + 0.45·s_usd) / 2.8 , −2, 2 )
 
 s_eq     = tanh( (0.5·r_SPY,1M + 0.5·r_SPY,3M) · 10 )
 s_credit = tanh( Δ(HYG/LQD)_1M · 15 )
-s_vix    = clip( (25 − VIX) / 15 , −1.5, 1.5 )
+s_vol    = mean( clip((25 − VIX)/15 , −1.5, 1.5) , clip((25 − VXN)/15 , −1.5, 1.5) )
+           // equal-weight average of inverted VIX and VXN; falls back to available series
 s_btc    = tanh( r_BTC,1M · 5 )
 s_usd    = tanh( −r_UUP,1M · 10 )   // inverted USD strength</pre>
     <p style="margin:6px 0 12px;font-size:0.78rem;color:var(--muted);">Label: Risk-On if S &gt; 0.4 · Neutral if |S| ≤ 0.4 · Risk-Off if S &lt; −0.4</p>

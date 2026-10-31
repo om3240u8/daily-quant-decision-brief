@@ -66,6 +66,7 @@ COMMODITIES = {
 
 VOLATILITY = {
     "^VIX": "VIX",
+    "^VXN": "VXN",
     # VIX3M / longer-dated via other sources if available
 }
 

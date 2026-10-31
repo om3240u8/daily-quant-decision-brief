@@ -25,12 +25,20 @@ def _risk_score_at(prices: pd.DataFrame, end_loc: int) -> float:
         if len(ratio) > 22:
             chg = ratio.iloc[-1] / ratio.iloc[-22] - 1
             score += np.tanh(chg * 15)
-    # VIX
+    # VIX + VXN (equal-weight average of inverted levels)
+    vol_scores = []
     if "^VIX" in prices.columns:
         vix = prices["^VIX"].iloc[:end_loc + 1].dropna()
         if len(vix) > 5:
             vix_lvl = float(vix.iloc[-1])
-            score += np.clip((25 - vix_lvl) / 15, -1.5, 1.5)
+            vol_scores.append(np.clip((25 - vix_lvl) / 15, -1.5, 1.5))
+    if "^VXN" in prices.columns:
+        vxn = prices["^VXN"].iloc[:end_loc + 1].dropna()
+        if len(vxn) > 5:
+            vxn_lvl = float(vxn.iloc[-1])
+            vol_scores.append(np.clip((25 - vxn_lvl) / 15, -1.5, 1.5))
+    if vol_scores:
+        score += float(np.mean(vol_scores))
     # BTC
     if "BTC-USD" in prices.columns:
         btc = prices["BTC-USD"].iloc[:end_loc + 1].dropna()

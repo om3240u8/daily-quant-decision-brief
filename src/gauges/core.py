@@ -15,7 +15,7 @@ def risk_on_off(prices: pd.DataFrame, returns: pd.DataFrame = None) -> Dict[str,
     """
     Simple Risk-On / Risk-Off composite.
     Positive = Risk-On.
-    Components: equity momentum, credit (HY vs IG), inverted VIX, BTC,
+    Components: equity momentum, credit (HY vs IG), inverted VIX+VXN (avg), BTC,
     and a light inverted USD-strength term (UUP / DXY).
     """
     score = 0.0
@@ -38,14 +38,22 @@ def risk_on_off(prices: pd.DataFrame, returns: pd.DataFrame = None) -> Dict[str,
             components["credit_appetite"] = round(chg, 4)
             score += np.tanh(chg * 15)
 
-    # 3. Inverted VIX
+    # 3. Inverted VIX + VXN (equal-weight average of the two inverted levels)
+    vol_scores = []
     if "^VIX" in prices.columns:
         vix = prices["^VIX"].dropna()
         if len(vix) > 5:
             vix_lvl = float(vix.iloc[-1])
             components["vix_level"] = round(vix_lvl, 2)
-            vix_score = (25 - vix_lvl) / 15
-            score += np.clip(vix_score, -1.5, 1.5)
+            vol_scores.append(np.clip((25 - vix_lvl) / 15, -1.5, 1.5))
+    if "^VXN" in prices.columns:
+        vxn = prices["^VXN"].dropna()
+        if len(vxn) > 5:
+            vxn_lvl = float(vxn.iloc[-1])
+            components["vxn_level"] = round(vxn_lvl, 2)
+            vol_scores.append(np.clip((25 - vxn_lvl) / 15, -1.5, 1.5))
+    if vol_scores:
+        score += float(np.mean(vol_scores))
 
     # 4. BTC high-beta
     if "BTC-USD" in prices.columns:
