@@ -2,11 +2,12 @@
 Quantitative Liquidity / Funding gauge.
 Both funding liquidity and market liquidity proxies.
 Includes inverted USD strength as a global funding / liquidity channel.
+Enhanced with SOFR-IORB, HY OAS, TGA/net liquidity, and market breadth (MLGT-style).
 """
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 
 
 def amihud_illiquidity(prices: pd.Series, volume: pd.Series = None, window: int = 21) -> float:
@@ -64,7 +65,40 @@ def _usd_strength_component(prices: pd.DataFrame) -> Tuple[float, Dict[str, Any]
     return contrib, components
 
 
-def liquidity_gauge(prices: pd.DataFrame, volumes: pd.DataFrame = None) -> Dict[str, Any]:
+def _market_breadth_component(prices: pd.DataFrame) -> Tuple[float, Dict[str, Any]]:
+    """
+    Simple market breadth: % of available equity ETFs above their 50-day SMA.
+    Higher % = better breadth = higher liquidity score.
+    """
+    equity_tickers = [t for t in ["SPY", "QQQ", "IWM", "VGK", "EWJ", "EEM", "FXI"] if t in prices.columns]
+    if len(equity_tickers) < 3:
+        return 0.0, {}
+
+    above_50 = 0
+    total = 0
+    for t in equity_tickers:
+        s = prices[t].dropna()
+        if len(s) > 50:
+            sma50 = s.iloc[-50:].mean()
+            if s.iloc[-1] > sma50:
+                above_50 += 1
+            total += 1
+
+    if total == 0:
+        return 0.0, {}
+
+    pct = above_50 / total
+    components = {"breadth_pct_above_50sma": round(pct, 3), "breadth_n": total}
+    # Score contribution: 0.5 at 50%, +0.4 at 80%, -0.5 at 20%
+    contrib = (pct - 0.5) * 1.0
+    return contrib, components
+
+
+def liquidity_gauge(
+    prices: pd.DataFrame,
+    volumes: pd.DataFrame = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Composite liquidity score.
     Higher score = better / more abundant liquidity.
@@ -73,7 +107,9 @@ def liquidity_gauge(prices: pd.DataFrame, volumes: pd.DataFrame = None) -> Dict[
       1. Market liquidity (SPY Amihud / realized-vol proxy)
       2. Credit market functioning (HYG realized vol)
       3. Short-rate pressure (^IRX)
-      4. Inverted USD strength (UUP / DXY) — global funding channel
+      4. Inverted USD strength (UUP / DXY)
+      5. Market breadth (% above 50SMA)
+      6. Optional injected: SOFR-IORB spread (bp), HY OAS (%), TGA (B)
     """
     components: Dict[str, Any] = {}
     score = 0.0
@@ -123,6 +159,57 @@ def liquidity_gauge(prices: pd.DataFrame, volumes: pd.DataFrame = None) -> Dict[
         score += usd_contrib
         n += 1
 
+    # 5. Market breadth
+    breadth_contrib, breadth_comp = _market_breadth_component(prices)
+    if breadth_comp:
+        components.update(breadth_comp)
+        score += breadth_contrib
+        n += 1
+
+    # 6. Injected microstructure series (SOFR-IORB, HY OAS, TGA)
+    if extra:
+        if "sofr_iorb_bp" in extra:
+            bp = float(extra["sofr_iorb_bp"])
+            components["sofr_iorb_bp"] = round(bp, 1)
+            # Positive spread = stress
+            if bp > 5:
+                score -= 0.6
+            elif bp > 2:
+                score -= 0.3
+            elif bp < 0:
+                score += 0.2
+            n += 1
+
+        if "hy_oas_pct" in extra:
+            oas = float(extra["hy_oas_pct"])
+            components["hy_oas_pct"] = round(oas, 2)
+            # Higher OAS = stress; baseline ~3.0
+            if oas > 4.0:
+                score -= 0.7
+            elif oas > 3.5:
+                score -= 0.4
+            elif oas > 3.0:
+                score -= 0.15
+            else:
+                score += 0.2
+            n += 1
+
+        if "tga_bn" in extra:
+            tga = float(extra["tga_bn"])
+            components["tga_bn"] = round(tga, 1)
+            # Elevated TGA drains liquidity; rough threshold ~900B+
+            if tga > 950:
+                score -= 0.4
+            elif tga > 900:
+                score -= 0.2
+            n += 1
+
+        if "net_liquidity_tn" in extra:
+            nl = float(extra["net_liquidity_tn"])
+            components["net_liquidity_tn"] = round(nl, 2)
+            # Informational; small contribution
+            n += 0  # don't count in n to avoid double-weighting with TGA
+
     if n == 0:
         return {
             "score": None,
@@ -141,12 +228,25 @@ def liquidity_gauge(prices: pd.DataFrame, volumes: pd.DataFrame = None) -> Dict[
         interp = "Liquidity conditions within normal range."
     elif final > -0.6:
         label = "Tightening"
-        interp = "Some signs of reduced market liquidity or funding pressure (incl. USD strength)."
+        # Build evidence string from available components
+        bits = []
+        if "sofr_iorb_bp" in components:
+            bits.append(f"SOFR-IORB +{components['sofr_iorb_bp']}bp")
+        if "hy_oas_pct" in components:
+            bits.append(f"HY OAS {components['hy_oas_pct']}%")
+        if "tga_bn" in components:
+            bits.append(f"TGA ${components['tga_bn']}B")
+        if "usd_ret_21d" in components:
+            bits.append(f"USD 1M {components['usd_ret_21d']:+.1%}")
+        evidence = ", ".join(bits) if bits else "mixed signals"
+        interp = f"Some signs of reduced market liquidity or funding pressure ({evidence})."
     else:
         label = "Stressed"
-        interp = ("Elevated illiquidity / funding stress signals "
-                  "(USD strength, credit or market liquidity). "
-                  "Caution on crowded or high-beta positions.")
+        interp = (
+            "Elevated illiquidity / funding stress signals "
+            "(SOFR-IORB positive, HY OAS elevated, TGA drain, USD strength, or credit vol). "
+            "Caution on crowded or high-beta positions; local liquidity crisis risk."
+        )
 
     return {
         "score": round(final, 3),

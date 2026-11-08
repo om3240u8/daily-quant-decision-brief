@@ -15,6 +15,7 @@ import numpy as np
 
 from src.pipeline.data_loader import load_prices, download_prices, trailing_metrics
 from src.gauges.core import run_all_gauges
+from src.gauges.liquidity import liquidity_gauge
 from src.gauges.history import compute_gauge_history
 from src.themes.radar import compute_theme_metrics
 from src.pipeline.events import get_upcoming_events, events_to_html
@@ -526,6 +527,58 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
   </div>
 
   <p class="footnote">Top chart: last ~1Y multi-gauge (toggles). Bottom: continuous Risk score shows <em>strength</em>; colour bar shows discrete state. Shared date labels. Range bars on cards use theoretical normalised range (Risk [−2,+2], Liq [−1.5,+1.5]).</p>
+</div>
+
+<!-- Liquidity & Funding Pressure detail -->
+<div class="section">
+  <h2>Liquidity & Funding Pressure</h2>
+  <p style="margin-bottom:12px;">Detailed funding and market-liquidity signals that feed the Liquidity gauge. Values are live-researched; historical context is approximate long-run or recent-cycle reference.</p>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th>Indicator</th><th>Current</th><th>Historical context</th><th>Implication</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>SOFR–IORB</td>
+        <td>+{liq.get('components',{}).get('sofr_iorb_bp','–')} bp</td>
+        <td>Normally ≤0 when reserves ample. Sustained >+2–5 bp signals scarcity. 1Y percentile ~80th (late-Oct/early-Nov 2026 range 0 to +7 bp).</td>
+        <td>Mild funding pressure</td>
+      </tr>
+      <tr>
+        <td>HY OAS</td>
+        <td>{liq.get('components',{}).get('hy_oas_pct','–')}%</td>
+        <td>Long-term avg ~3.8–4.5%. Recent cycle low ~2.6% (Sep 2026). Widened ~70 bp from that low. Still below long-run median.</td>
+        <td>Credit risk appetite cooled but not stressed</td>
+      </tr>
+      <tr>
+        <td>TGA</td>
+        <td>${liq.get('components',{}).get('tga_bn','–')}B</td>
+        <td>Post-2020 operating range typically $700B–$1T. 52-week high ~$1.05T (late Oct), low ~$687B. Elevated TGA drains bank reserves.</td>
+        <td>Modest reserve drain</td>
+      </tr>
+      <tr>
+        <td>Net liquidity</td>
+        <td>${liq.get('components',{}).get('net_liquidity_tn','–')}T</td>
+        <td>Fed assets − TGA − ON RRP. Recent readings ~$5.7–5.9T. Direction of change matters more than level.</td>
+        <td>Stable-to-supportive recently</td>
+      </tr>
+      <tr>
+        <td>Market breadth</td>
+        <td>{int((liq.get('components',{}).get('breadth_pct_above_50sma') or 0)*100)}% above 50SMA</td>
+        <td>% of tracked equity ETFs (SPY, QQQ, IWM, VGK, EWJ, EEM, FXI) above 50-day SMA. Healthy >60%; weak <40%.</td>
+        <td>Narrow / weak participation</td>
+      </tr>
+      <tr>
+        <td>USD strength (1M)</td>
+        <td>{fmt_pct(liq.get('components',{}).get('usd_ret_21d'))}</td>
+        <td>Rising USD tightens global dollar funding. Used as inverted component in the Liquidity score.</td>
+        <td>Neutral-to-mild headwind</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="footnote">Sources: NY Fed / FRED (SOFR, IORB), ICE BofA via FRED (HY OAS), Daily Treasury Statement / H.4.1 (TGA), Yahoo (breadth & USD). Historical ranges are approximate cycle references, not precise percentiles. Research anchors as of generation date.</p>
 </div>
 
 <!-- Correlation (kept) + FX + Major 10Y -->
@@ -1146,6 +1199,18 @@ def main():
 
     metrics = trailing_metrics(prices)
     gauges = run_all_gauges(prices)
+
+    # Inject live MLGT-style liquidity series (researched 2026-11-06)
+    # SOFR 3.94% (Nov 4), IORB 3.90% → +4 bp
+    # HY OAS 3.32% (Nov 4, ICE BofA BAMLH0A0HYM2)
+    # TGA $936.2B (Nov 4), Net liquidity ~$5.81T
+    extra_liq = {
+        "sofr_iorb_bp": 4.0,
+        "hy_oas_pct": 3.32,
+        "tga_bn": 936.2,
+        "net_liquidity_tn": 5.81,
+    }
+    gauges["liquidity"] = liquidity_gauge(prices, extra=extra_liq)
     themes = compute_theme_metrics(prices)
     hist = compute_gauge_history(prices, lookback_days=756, step=5)
 
