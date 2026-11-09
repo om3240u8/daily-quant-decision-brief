@@ -78,21 +78,52 @@ def policy_insight(snap):
     return " ".join(parts)
 
 def policy_scenarios(snap):
+    """Near-term scenarios anchored to live event-book / ZQ weights.
+    Titles and text are generated from the next FOMC date — never hard-coded to a past meeting.
+    """
     snap = snap or {}
+    meeting_str = snap.get("meeting") or "next FOMC"
+    days = snap.get("days_ahead")
+    days_txt = f" ({days}d)" if days is not None else ""
+
     ev, inv = snap.get("event") or {}, snap.get("zq_implied") or {}
     hold_p = ev.get("hold") if ev.get("hold") is not None else (inv.get("p_hold") or 0.50)
     hike_p = ev.get("hike") if ev.get("hike") is not None else (inv.get("p_hike") or 0.40)
+    cut_p = ev.get("cut_25") or inv.get("p_cut") or 0.0
     implied_bp = inv.get("implied_bp")
-    raw = [hold_p, hike_p, 0.12, 0.08]
+
+    # Four buckets: hold, hike, residual path risk, shock
+    raw = [hold_p, hike_p, max(0.08, 1.0 - hold_p - hike_p - cut_p), 0.10]
     s = sum(raw) or 1.0
     w = [x / s for x in raw]
-    later = (f"ZQ strip still prices ~{implied_bp:+.0f}bp into this meeting month. Sep already delivered +25bp to 3.75–4.00%; dots still lean to another hike in 2026."
-             if implied_bp is not None else "Sep delivered +25bp. Path risk is now Oct 28 / Dec 9.")
+
+    bp_txt = f"ZQ strip ~{implied_bp:+.0f}bp" if implied_bp is not None else "ZQ path"
+    later = (
+        f"{bp_txt} into the {meeting_str} meeting month. "
+        "Path risk is the residual after this statement (next meeting or year-end SEP)."
+    )
+
     return [
-        {"title": "Hold at Oct 28 meeting", "p": w[0], "text": "Funds stay 3.75–4.00%. Residual risk is Warsh tone and the Dec SEP, not the October print."},
-        {"title": "+25bp at Oct 28 meeting", "p": w[1], "text": "Target 4.00–4.25%. Aligns with the Sep dots (majority at least one more hike in 2026)."},
-        {"title": "Skip Oct, hike by Dec", "p": w[2], "text": later},
-        {"title": "Data / geo shock", "p": w[3], "text": "NFP 2 Oct / CPI 14 Oct or an oil spike can reopen a 10pp+ basis. Event books move first on the headline; ZQ moves on the path."},
+        {
+            "title": f"Hold at {meeting_str}",
+            "p": w[0],
+            "text": f"No change at the {meeting_str}{days_txt} meeting. Statement tone and SEP (if any) drive the residual path.",
+        },
+        {
+            "title": f"+25bp at {meeting_str}",
+            "p": w[1],
+            "text": f"25bp hike at {meeting_str}. Aligns with event-book hike probability and ZQ-implied path when positive.",
+        },
+        {
+            "title": "Skip this meeting, hike later",
+            "p": w[2],
+            "text": later,
+        },
+        {
+            "title": "Data / geo shock",
+            "p": w[3],
+            "text": "Incoming NFP / CPI / oil or geo shock re-opens a material basis between event books and ZQ. Event books react first on the headline; ZQ moves on the path.",
+        },
     ]
 
 def policy_card_html(snap):
