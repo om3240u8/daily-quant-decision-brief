@@ -1,3 +1,4 @@
+from src.pipeline.liquidity_fetch import collect_liquidity
 """
 Generate the responsive HTML Daily Quant Decision Brief.
 Includes historical analogs, liquidity gauge (with USD), range bars,
@@ -532,7 +533,6 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
 <!-- Liquidity & Funding Pressure detail -->
 <div class="section">
   <h2>Liquidity & Funding Pressure</h2>
-  <p style="margin-bottom:12px;">Detailed funding and market-liquidity signals that feed the Liquidity gauge. Values are live-researched; historical context is approximate long-run or recent-cycle reference.</p>
   <div class="table-scroll">
   <table>
     <thead>
@@ -541,26 +541,26 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
     <tbody>
       <tr>
         <td>SOFR–IORB</td>
-        <td>+{liq.get('components',{}).get('sofr_iorb_bp','–')} bp</td>
-        <td>Normally ≤0 when reserves ample. Sustained >+2–5 bp signals scarcity. 1Y percentile ~80th (late-Oct/early-Nov 2026 range 0 to +7 bp).</td>
-        <td>Mild funding pressure</td>
+        <td>{liq.get('components',{}).get('sofr_iorb_bp','–')} bp</td>
+        <td>Normally ≤0 when reserves ample. Sustained >+2–5 bp signals scarcity.</td>
+        <td>No funding pressure (spread negative)</td>
       </tr>
       <tr>
         <td>HY OAS</td>
         <td>{liq.get('components',{}).get('hy_oas_pct','–')}%</td>
-        <td>Long-term avg ~3.8–4.5%. Recent cycle low ~2.6% (Sep 2026). Widened ~70 bp from that low. Still below long-run median.</td>
+        <td>Long-term avg ~3.8–4.5%. Recent cycle low near ~2.6%. Currently below long-run median.</td>
         <td>Credit risk appetite cooled but not stressed</td>
       </tr>
       <tr>
         <td>TGA</td>
         <td>${liq.get('components',{}).get('tga_bn','–')}B</td>
-        <td>Post-2020 operating range typically $700B–$1T. 52-week high ~$1.05T (late Oct), low ~$687B. Elevated TGA drains bank reserves.</td>
+        <td>Post-2020 operating range typically $700B–$1T. Elevated TGA drains bank reserves.</td>
         <td>Modest reserve drain</td>
       </tr>
       <tr>
         <td>Net liquidity</td>
         <td>${liq.get('components',{}).get('net_liquidity_tn','–')}T</td>
-        <td>Fed assets − TGA − ON RRP. Recent readings ~$5.7–5.9T. Direction of change matters more than level.</td>
+        <td>Fed assets − TGA − ON RRP. Direction of change matters more than level.</td>
         <td>Stable-to-supportive recently</td>
       </tr>
       <tr>
@@ -1200,16 +1200,16 @@ def main():
     metrics = trailing_metrics(prices)
     gauges = run_all_gauges(prices)
 
-    # Inject live MLGT-style liquidity series (researched 2026-11-06)
-    # SOFR 3.94% (Nov 4), IORB 3.90% → +4 bp
-    # HY OAS 3.32% (Nov 4, ICE BofA BAMLH0A0HYM2)
-    # TGA $936.2B (Nov 4), Net liquidity ~$5.81T
+    # Live liquidity series (FRED public CSVs, no API key)
+    liq_snap = collect_liquidity()
     extra_liq = {
-        "sofr_iorb_bp": 4.0,
-        "hy_oas_pct": 3.32,
-        "tga_bn": 936.2,
-        "net_liquidity_tn": 5.81,
+        "sofr_iorb_bp": liq_snap.get("sofr_iorb_bp"),
+        "hy_oas_pct": liq_snap.get("hy_oas_pct"),
+        "tga_bn": liq_snap.get("tga_bn"),
+        "net_liquidity_tn": liq_snap.get("net_liquidity_tn"),
     }
+    if not liq_snap.get("ok"):
+        print("WARNING: liquidity fetch incomplete:", liq_snap.get("errors"))
     gauges["liquidity"] = liquidity_gauge(prices, extra=extra_liq)
     themes = compute_theme_metrics(prices)
     hist = compute_gauge_history(prices, lookback_days=756, step=5)
