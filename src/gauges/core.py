@@ -347,8 +347,52 @@ def funding_stress_gauge(prices: pd.DataFrame) -> Dict[str, Any]:
     return result
 
 
-def run_all_gauges(prices: pd.DataFrame) -> Dict[str, Any]:
-    return {
+
+
+def sentiment_gauge(latest_fng=None, latest_comp_z=None) -> Dict[str, Any]:
+    """
+    Equity sentiment composite (open-data GS-style proxy).
+    Score = multi-component z-score (CNN F&G + AAII + multi-COT).
+    Reference range: theoretical / historical typical [-2.0, +2.0];
+    extremes beyond ±1.5 are sparse but carry the strongest contrarian signal.
+    Positive = stretched (higher subsequent return risk); negative = washed out.
+    """
+    result = {"score": None, "label": "N/A", "components": {}, "interpretation": ""}
+
+    components = {}
+    if latest_fng is not None:
+        components["cnn_fng"] = round(float(latest_fng), 1)
+    if latest_comp_z is not None:
+        z = float(latest_comp_z)
+        components["comp_z"] = round(z, 2)
+        result["score"] = round(z, 2)
+
+        # Reference range notes
+        components["ref_range"] = [-2.0, 2.0]
+        components["extreme_threshold"] = 1.5
+
+        if z > 1.5:
+            result["label"] = "Extremely Stretched"
+            result["interpretation"] = "Sentiment z > +1.5 — extreme optimism; historically weakest subsequent returns (sparse sample)."
+        elif z > 1.0:
+            result["label"] = "Stretched"
+            result["interpretation"] = "Sentiment elevated (z > +1.0). Contrarian caution: 13w forward returns average lower than mid-range."
+        elif z < -1.5:
+            result["label"] = "Extremely Washed Out"
+            result["interpretation"] = "Sentiment z < −1.5 — extreme pessimism; strongest historical 13w/26w response in lowest quintile."
+        elif z < -1.0:
+            result["label"] = "Washed Out"
+            result["interpretation"] = "Sentiment depressed (z < −1.0). Contrarian opportunity zone; Q1 lowest-sentiment historically delivers highest subsequent returns."
+        else:
+            result["label"] = "Neutral"
+            result["interpretation"] = "Sentiment mid-range (|z| ≤ 1.0). Limited incremental contrarian edge."
+
+    result["components"] = components
+    return result
+
+
+def run_all_gauges(prices: pd.DataFrame, sentiment_inputs: Dict[str, Any] = None) -> Dict[str, Any]:
+    gauges = {
         "risk_on_off": risk_on_off(prices),
         "yield_curve": yield_curve_gauge(),
         "vol_risk_premium": vol_risk_premium(prices),
@@ -362,3 +406,9 @@ def run_all_gauges(prices: pd.DataFrame) -> Dict[str, Any]:
         "funding_stress": funding_stress_gauge(prices),
         "generated_at": pd.Timestamp.now().isoformat()
     }
+    if sentiment_inputs:
+        gauges["sentiment"] = sentiment_gauge(
+            latest_fng=sentiment_inputs.get("cnn_fng"),
+            latest_comp_z=sentiment_inputs.get("comp_z"),
+        )
+    return gauges

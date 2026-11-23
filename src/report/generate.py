@@ -99,6 +99,7 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
     xcorr = gauges.get("cross_asset_corr", {})
     liq_func = gauges.get("liquidity_functioning", {})
     fund = gauges.get("funding_stress", {})
+    sent = gauges.get("sentiment", {})
 
     us_tickers = ["SPY", "QQQ", "IWM", "VLUE", "MTUM", "QUAL", "USMV"]
     dm_tickers = ["VGK", "EWJ", "EWH"]
@@ -181,6 +182,11 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
     vrp_bar = _range_bar_html(vrp_score, vrp_rng.get("p5"), vrp_rng.get("p95"),
                               vrp_rng.get("min"), vrp_rng.get("max"),
                               theor_lo=None, theor_hi=None, decimals=1)
+
+    # Sentiment composite reference range [-2, +2]
+    sent_score = sent.get("score")
+    sent_bar = _range_bar_html(sent_score, None, None, None, None,
+                               theor_lo=-2.0, theor_hi=2.0, decimals=2)
 
     fwd = analogs.get("forward", {})
     analog_rows = ""
@@ -484,6 +490,12 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
     <div class="value">{credit.get('label', '–')}</div>
     <div class="note">HY/IG {fmt_pct(credit.get('score'))}</div>
   </div>
+  <div class="gauge-card">
+    <div class="label">Sentiment</div>
+    <div class="value">{sent.get('label', '–')}</div>
+    <div class="note">z {fmt_num(sent.get('score'))} · CNN {fmt_num(sent.get('components', {}).get('cnn_fng'))}</div>
+    {sent_bar}
+  </div>
 </div>
 
 <!-- Selective monitors removed from top strip — see body detail section -->
@@ -781,6 +793,17 @@ slope_10y3m = y_10Y − y_3M</pre>
     <p><strong>5. Credit</strong></p>
     <pre style="background:#0d1117;padding:8px 10px;border-radius:6px;font-size:0.78rem;overflow-x:auto;color:#c9d1d9;">score = Δ(HYG / LQD)_1M</pre>
     <p style="margin:6px 0 12px;font-size:0.78rem;color:var(--muted);">Risk-On Credit if &gt; +1% · Risk-Off Credit if &lt; −1% · else Neutral</p>
+
+    <p><strong>6. Equity Sentiment Composite</strong> · reference range <code>[-2.0, +2.0]</code></p>
+    <p style="margin:4px 0 8px;color:var(--muted);">Open-data GS-style proxy. Score = 5-year rolling z-score of equal-weight CNN F&G + AAII bull-bear spread + multi-contract COT (ES+NQ+YM non-commercial). Positive = stretched; negative = washed out. Contrarian: lowest quintile historically delivers the highest subsequent 13w/26w returns.</p>
+    <pre style="background:#0d1117;padding:8px 10px;border-radius:6px;font-size:0.78rem;overflow-x:auto;color:#c9d1d9;">Comp_z = mean( z_FNG , z_AAII , z_COT_multi )
+
+z_* = (x − μ_5y) / σ_5y   // rolling 5-year, min 52 weeks
+z_COT_multi = mean( z_ES , z_NQ , z_YM )
+
+Reference range: typical [-2, +2]; extremes |z| > 1.5 are sparse.
+Label: Extremely Stretched (z>1.5) · Stretched (1<z≤1.5) · Neutral (|z|≤1) · Washed Out (−1.5≤z<−1) · Extremely Washed Out (z<−1.5)</pre>
+    <p style="margin:6px 0 12px;font-size:0.78rem;color:var(--muted);">Data: CNN F&G (daily), AAII (weekly, public archive), CFTC COT legacy non-commercial for ES/NQ/YM. Composite updated weekly; CNN readable daily.</p>
 
     <p><strong>6. Policy pricing (next FOMC)</strong></p>
     <pre style="background:#0d1117;padding:8px 10px;border-radius:6px;font-size:0.78rem;overflow-x:auto;color:#c9d1d9;">ZQ implied avg EFFR = 100 − P_ZQ
@@ -1198,7 +1221,16 @@ def main():
     print(f"Prices shape: {prices.shape}")
 
     metrics = trailing_metrics(prices)
-    gauges = run_all_gauges(prices)
+    # Optional sentiment inputs (weekly composite + daily CNN)
+    sentiment_inputs = None
+    sent_path = Path("data/sentiment/latest.json")
+    if sent_path.exists():
+        try:
+            import json
+            sentiment_inputs = json.loads(sent_path.read_text())
+        except Exception as e:
+            print(f"sentiment load failed: {e}")
+    gauges = run_all_gauges(prices, sentiment_inputs=sentiment_inputs)
 
     # Live liquidity series (FRED public CSVs, no API key)
     liq_snap = collect_liquidity()
