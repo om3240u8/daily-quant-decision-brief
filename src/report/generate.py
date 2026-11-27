@@ -18,6 +18,7 @@ from src.pipeline.data_loader import load_prices, download_prices, trailing_metr
 from src.gauges.core import run_all_gauges
 from src.gauges.liquidity import liquidity_gauge
 from src.gauges.history import compute_gauge_history
+from src.gauges.rotation import build_rotation_universes
 from src.themes.radar import compute_theme_metrics
 from src.pipeline.events import get_upcoming_events, events_to_html
 from src.pipeline.policy_pricing import (
@@ -86,7 +87,7 @@ def _range_bar_html(score, p5, p95, min_v, max_v, theor_lo=None, theor_hi=None, 
     """
 
 
-def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> str:
+def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None, rotation=None) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M HKT")
     risk = gauges.get("risk_on_off", {})
     vrp = gauges.get("vol_risk_premium", {})
@@ -312,6 +313,11 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
                 lab = dates_full[idx][:7] if len(dates_full[idx]) >= 7 else dates_full[idx]
                 regime_date_labels += f'<span class="reg-date" style="left:{left_pct:.1f}%">{lab}</span>'
 
+    # Rotation map data
+    rotation_json = json.dumps(rotation or {})
+    if not rotation:
+        rotation_json = "{}"
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -436,6 +442,20 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
   }}
   .range-select button.active {{
     background: #1f6feb; border-color: #1f6feb; color: #fff;
+  }}
+  .rot-filter {{
+    background: #21262d; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 6px; padding: 4px 12px; font-size: 0.75rem; cursor: pointer;
+  }}
+  .rot-filter.active {{
+    background: #1f6feb; border-color: #1f6feb; color: #fff;
+  }}
+  .rot-window {{
+    background: #21262d; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 6px; padding: 3px 8px; font-size: 0.7rem; cursor: pointer;
+  }}
+  .rot-window.active {{
+    background: #238636; border-color: #238636; color: #fff;
   }}
   .regime-chart-wrap {{ position: relative; }}
   .regime-strip-wrap {{
@@ -734,6 +754,26 @@ def build_html(prices, metrics, gauges, themes, analogs, hist, policy=None) -> s
   </table>
 </div>
 
+<!-- Rotation Map (RRG-style) -->
+<div class="section">
+  <h2>Relative Rotation Map <small style="color:var(--muted)">(RS-Ratio vs RS-Momentum)</small></h2>
+  <div style="margin:8px 0; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+    <button class="rot-filter active" data-key="styles">Styles</button>
+    <button class="rot-filter" data-key="regions">Regions</button>
+    <button class="rot-filter" data-key="sectors">Sectors</button>
+    <button class="rot-filter" data-key="assets">Cross-Asset</button>
+    <span style="margin-left:8px; color:var(--muted); font-size:0.75rem;">Window:</span>
+    <button class="rot-window" data-win="10/5">10/5</button>
+    <button class="rot-window active" data-win="21/10">21/10</button>
+    <button class="rot-window" data-win="63/21">63/21</button>
+    <button class="rot-window" data-win="126/42">126/42</button>
+  </div>
+  <div class="chart-box" style="height:380px; position:relative;">
+    <canvas id="rotationChart"></canvas>
+  </div>
+  <div id="rotationLegend" class="note" style="margin-top:6px;"></div>
+</div>
+
 <!-- Cross asset (expanded commodities) -->
 <div class="section">
   <h2>Cross-Asset (Crypto · Commodities · Credit · FX · Vol)</h2>
@@ -855,6 +895,7 @@ basis = P_hike_ZQ − 0.5·(P_hike_Kalshi + P_hike_Poly)</pre>
 </footer>
 
 <script>
+const ROTATION_DATA = {rotation_json};
 (function() {{
   const dates = {chart_dates};
   const risk = {chart_risk};
@@ -1198,6 +1239,178 @@ basis = P_hike_ZQ − 0.5·(P_hike_Kalshi + P_hike_Poly)</pre>
     const active = document.querySelector('#regimeRangeSelect button.active');
     drawRegime(active ? active.getAttribute('data-range') : '3y');
   }});
+
+  // ===== Relative Rotation Map =====
+  let rotationChart = null;
+  let currentRotKey = 'styles';
+  let currentRotWin = '21/10';
+
+  const QUAD_COLORS = {{
+    Leading: 'rgba(63,185,80,0.18)',
+    Improving: 'rgba(88,166,255,0.18)',
+    Weakening: 'rgba(210,153,34,0.18)',
+    Lagging: 'rgba(248,81,73,0.18)'
+  }};
+  const POINT_COLORS = {{
+    Leading: '#3fb950',
+    Improving: '#58a6ff',
+    Weakening: '#d29922',
+    Lagging: '#f85149'
+  }};
+
+  function drawRotation(key, win) {{
+    currentRotKey = key || currentRotKey;
+    currentRotWin = win || currentRotWin;
+    const universe = ROTATION_DATA[currentRotKey];
+    if (!universe || !universe.windows) {{
+      document.getElementById('rotationLegend').textContent = 'No data.';
+      return;
+    }}
+    const points = universe.windows[currentRotWin] || [];
+    if (!points.length) {{
+      document.getElementById('rotationLegend').textContent = 'No points for this window.';
+      return;
+    }}
+
+    const datasets = points.map(function(p) {{
+      return {{
+        label: p.name || p.ticker,
+        data: [{{x: p.x, y: p.y}}],
+        backgroundColor: POINT_COLORS[p.quadrant] || '#8b949e',
+        borderColor: '#0d1117',
+        borderWidth: 1,
+        pointRadius: 8,
+        pointHoverRadius: 11,
+        pointStyle: 'circle'
+      }};
+    }});
+
+    const ctx = document.getElementById('rotationChart');
+    if (!ctx) return;
+    if (rotationChart) rotationChart.destroy();
+
+    rotationChart = new Chart(ctx, {{
+      type: 'scatter',
+      data: {{ datasets: datasets }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: {{ padding: {{ top: 16, right: 12, bottom: 8, left: 8 }} }},
+        plugins: {{
+          legend: {{ display: false }},
+          tooltip: {{
+            callbacks: {{
+              label: function(ctx) {{
+                const p = points[ctx.datasetIndex];
+                return (p.name || p.ticker) + ' · ' + p.quadrant + '  (RS ' + p.x + ', Mom ' + p.y + ')';
+              }}
+            }}
+          }},
+          // Custom plugin for labels + quadrant shading + 100 lines
+          rotationOverlay: {{}}
+        }},
+        scales: {{
+          x: {{
+            title: {{ display: true, text: 'RS-Ratio (vs ' + (universe.benchmark || 'bench') + ')', color: '#8b949e' }},
+            ticks: {{ color: '#8b949e' }},
+            grid: {{ color: '#30363d' }},
+            min: 88, max: 112
+          }},
+          y: {{
+            title: {{ display: true, text: 'RS-Momentum', color: '#8b949e' }},
+            ticks: {{ color: '#8b949e' }},
+            grid: {{ color: '#30363d' }},
+            min: 88, max: 112
+          }}
+        }}
+      }},
+      plugins: [{{
+        id: 'rotationOverlay',
+        afterDraw: function(chart) {{
+          const ctx2 = chart.ctx;
+          const xScale = chart.scales.x;
+          const yScale = chart.scales.y;
+          const area = chart.chartArea;
+
+          // Quadrant background rectangles
+          const x100 = xScale.getPixelForValue(100);
+          const y100 = yScale.getPixelForValue(100);
+
+          ctx2.save();
+          // Leading (top-right)
+          ctx2.fillStyle = QUAD_COLORS.Leading;
+          ctx2.fillRect(x100, area.top, area.right - x100, y100 - area.top);
+          // Improving (top-left)
+          ctx2.fillStyle = QUAD_COLORS.Improving;
+          ctx2.fillRect(area.left, area.top, x100 - area.left, y100 - area.top);
+          // Weakening (bottom-right)
+          ctx2.fillStyle = QUAD_COLORS.Weakening;
+          ctx2.fillRect(x100, y100, area.right - x100, area.bottom - y100);
+          // Lagging (bottom-left)
+          ctx2.fillStyle = QUAD_COLORS.Lagging;
+          ctx2.fillRect(area.left, y100, x100 - area.left, area.bottom - y100);
+
+          // Boundary lines at 100
+          ctx2.strokeStyle = '#8b949e';
+          ctx2.lineWidth = 1;
+          ctx2.setLineDash([4, 3]);
+          ctx2.beginPath();
+          ctx2.moveTo(x100, area.top);
+          ctx2.lineTo(x100, area.bottom);
+          ctx2.moveTo(area.left, y100);
+          ctx2.lineTo(area.right, y100);
+          ctx2.stroke();
+          ctx2.setLineDash([]);
+
+          // Quadrant labels
+          ctx2.font = '11px -apple-system, sans-serif';
+          ctx2.fillStyle = '#8b949e';
+          ctx2.textAlign = 'left';
+          ctx2.fillText('Leading', x100 + 6, area.top + 14);
+          ctx2.fillText('Improving', area.left + 6, area.top + 14);
+          ctx2.fillText('Weakening', x100 + 6, area.bottom - 6);
+          ctx2.fillText('Lagging', area.left + 6, area.bottom - 6);
+
+          // Point labels
+          ctx2.font = '10px -apple-system, sans-serif';
+          ctx2.textAlign = 'left';
+          points.forEach(function(p, i) {{
+            const meta = chart.getDatasetMeta(i);
+            if (!meta || !meta.data || !meta.data[0]) return;
+            const pt = meta.data[0];
+            const label = (p.name || p.ticker).split(' ')[0];
+            ctx2.fillStyle = POINT_COLORS[p.quadrant] || '#e6edf3';
+            ctx2.fillText(label, pt.x + 10, pt.y - 6);
+          }});
+          ctx2.restore();
+        }}
+      }}]
+    }});
+
+    // Legend summary
+    const counts = {{}};
+    points.forEach(function(p) {{ counts[p.quadrant] = (counts[p.quadrant] || 0) + 1; }});
+    document.getElementById('rotationLegend').textContent =
+      (universe.label || key) + ' · window ' + currentRotWin + ' · bench ' + (universe.benchmark || '') +
+      ' · Leading ' + (counts.Leading||0) + ' · Improving ' + (counts.Improving||0) +
+      ' · Weakening ' + (counts.Weakening||0) + ' · Lagging ' + (counts.Lagging||0);
+  }}
+
+  document.querySelectorAll('.rot-filter').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      document.querySelectorAll('.rot-filter').forEach(function(b) {{ b.classList.remove('active'); }});
+      btn.classList.add('active');
+      drawRotation(btn.getAttribute('data-key'), null);
+    }});
+  }});
+  document.querySelectorAll('.rot-window').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      document.querySelectorAll('.rot-window').forEach(function(b) {{ b.classList.remove('active'); }});
+      btn.classList.add('active');
+      drawRotation(null, btn.getAttribute('data-win'));
+    }});
+  }});
+  drawRotation('styles', '21/10');
 }})();
 
 </script>
@@ -1246,6 +1459,14 @@ def main():
     themes = compute_theme_metrics(prices)
     hist = compute_gauge_history(prices, lookback_days=756, step=5)
 
+    # Relative Rotation Map
+    try:
+        rotation = build_rotation_universes(prices)
+        print("Rotation universes:", {k: list(v.get("windows", {}).keys()) for k, v in rotation.items()})
+    except Exception as e:
+        print(f"rotation failed: {e}")
+        rotation = {}
+
     risk_score = gauges.get("risk_on_off", {}).get("score", 0) or 0
     slope = gauges.get("yield_curve", {}).get("score")
     vrp_score = gauges.get("vol_risk_premium", {}).get("score")
@@ -1264,7 +1485,7 @@ def main():
         print(f"policy_pricing failed: {e}")
         policy = {"ok": False}
 
-    html = build_html(prices, metrics, gauges, themes, analogs, hist, policy=policy)
+    html = build_html(prices, metrics, gauges, themes, analogs, hist, policy=policy, rotation=rotation)
 
     out_dir = Path(__file__).resolve().parents[2] / "output"
     out_dir.mkdir(exist_ok=True)

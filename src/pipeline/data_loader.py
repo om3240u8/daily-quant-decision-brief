@@ -19,7 +19,7 @@ except ImportError:
     HAS_FRED = False
 
 from src.config import (
-    EQUITIES, RATES, CREDIT, FX, COMMODITIES, VOLATILITY, CRYPTO, THEMES,
+    EQUITIES, RATES, CREDIT, FX, COMMODITIES, VOLATILITY, CRYPTO, THEMES, SECTORS,
     FRED_SERIES, LOOKBACK_DAYS
 )
 
@@ -30,7 +30,7 @@ DATA_DIR.mkdir(exist_ok=True)
 def _flatten_tickers():
     """Return flat list of all price tickers."""
     tickers = []
-    for d in [EQUITIES, RATES, CREDIT, FX, COMMODITIES, VOLATILITY, CRYPTO]:
+    for d in [EQUITIES, RATES, CREDIT, FX, COMMODITIES, VOLATILITY, CRYPTO, SECTORS]:
         tickers.extend(d.keys())
     # Themes
     for theme in THEMES.values():

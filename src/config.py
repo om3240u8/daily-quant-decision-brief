@@ -75,6 +75,21 @@ CRYPTO = {
     "ETH-USD": "Ethereum",
 }
 
+# US Sector SPDRs (for rotation map)
+SECTORS = {
+    "XLK": "Technology",
+    "XLF": "Financials",
+    "XLE": "Energy",
+    "XLV": "Health Care",
+    "XLY": "Consumer Discretionary",
+    "XLP": "Consumer Staples",
+    "XLI": "Industrials",
+    "XLB": "Materials",
+    "XLU": "Utilities",
+    "XLRE": "Real Estate",
+    "XLC": "Communication Services",
+}
+
 # Thematic ETFs for radar
 THEMES = {
     "AI": {"tickers": ["BOTZ", "IRBO", "AIQ"], "name": "Artificial Intelligence"},
